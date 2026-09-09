@@ -9,6 +9,7 @@ def test_loads_repository_config() -> None:
     config = AppConfig.load(Path("config.yaml"))
     assert config.audio.sample_rate == 16000
     assert config.asr.language == "vi"
+    assert config.asr.model == "Qwen/Qwen3-ASR-1.7B-hf"
 
 
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
@@ -16,4 +17,3 @@ def test_rejects_unknown_keys(tmp_path: Path) -> None:
     path.write_text("audio:\n  mystery: true\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="mystery"):
         AppConfig.load(path)
-

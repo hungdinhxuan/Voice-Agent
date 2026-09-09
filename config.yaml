@@ -15,7 +15,7 @@ vad:
   speech_pad_ms: 150
 
 asr:
-  model: Qwen/Qwen3-ASR-0.6B-hf
+  model: Qwen/Qwen3-ASR-1.7B-hf
   device: cuda
   dtype: bfloat16
   language: vi

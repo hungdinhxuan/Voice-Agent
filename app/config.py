@@ -34,7 +34,7 @@ class VADConfig:
 
 @dataclass(slots=True)
 class ASRConfig:
-    model: str = "Qwen/Qwen3-ASR-0.6B-hf"
+    model: str = "Qwen/Qwen3-ASR-1.7B-hf"
     device: str = "cuda"
     dtype: str = "bfloat16"
     language: str | None = "vi"

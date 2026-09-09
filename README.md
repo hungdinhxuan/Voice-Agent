@@ -5,7 +5,7 @@
 ```text
 Microphone (16 kHz mono)
   -> Silero VAD (ONNX/CPU)
-  -> Qwen3-ASR-0.6B (GPU)
+  -> Qwen3-ASR-1.7B (GPU)
   -> Qwen3.5-4B Q4_K_M qua Ollama, streaming text (GPU)
   -> sentence chunker
   -> VieNeu-TTS v3 Turbo (ONNX/CPU)
@@ -18,7 +18,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 ## Trạng thái tích hợp
 
 - Đã tích hợp Silero VAD qua API Python chính thức và ONNX Runtime.
-- Đã tích hợp `Qwen/Qwen3-ASR-0.6B-hf` qua Transformers native `apply_transcription_request`.
+- Đã tích hợp `Qwen/Qwen3-ASR-1.7B-hf` qua Transformers native `apply_transcription_request`.
 - Đã tích hợp `qwen3.5:4b` qua Ollama local API, streaming NDJSON và giữ model trong VRAM.
 - Transformers vẫn là backend dự phòng qua `llm.backend: transformers`.
 - Đã tích hợp VieNeu-TTS v3 Turbo qua SDK `vieneu`, backend ONNX/CPU và `infer_stream` native.
@@ -26,7 +26,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 - Đã có test cho chunker, history, state, cancellation và config.
 - Đã có web dashboard local hiển thị state, transcript, phản hồi streaming, latency và log.
 
-Unit test không tải model. Smoke test ngày 09/09/2026 trên RTX 5070 Ti 16 GB đã xác nhận ASR, TTS, Ollama và backend Transformers cũ. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
+Unit test không tải model. Smoke test ngày 09/09/2026 trên RTX 5070 Ti 16 GB đã xác nhận Qwen3-ASR-1.7B nhận đúng câu tiếng Việt mẫu, cùng với TTS, Ollama và backend Transformers cũ. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
 ## Yêu cầu
 
@@ -75,7 +75,7 @@ ollama ps
 Tải Qwen3-ASR vào Hugging Face cache:
 
 ```bash
-uv run hf download Qwen/Qwen3-ASR-0.6B-hf
+uv run hf download Qwen/Qwen3-ASR-1.7B-hf
 ```
 
 Chỉ tải model Transformers LLM nếu dùng backend dự phòng:
@@ -240,7 +240,7 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 - Chưa có acoustic echo cancellation. Chế độ half-duplex mặc định tránh speaker kích hoạt VAD khi dùng loa ngoài.
 - ASR chạy theo utterance, chưa dùng streaming ASR.
 - Backend Ollama dùng Q4_K_M. Chất lượng có thể thấp hơn checkpoint BF16 Transformers một ít.
-- Chưa benchmark Ollama trên máy hiện tại vì Ollama chưa được cài trong môi trường phát triển.
+- Ollama `qwen3.5:4b` và Qwen3-ASR-1.7B chạy đồng thời trong giới hạn VRAM 16 GB trên máy smoke test.
 - Web UI hiện là dashboard điều khiển pipeline audio của máy chủ. Chưa dùng microphone/audio playback của trình duyệt.
 - Backend Transformers vẫn dùng torch fallback nếu chọn lại; smoke test cũ đo first text khoảng 1.5 giây.
 - Một lệnh TTS hoặc ASR đang chạy trong worker thread không thể dừng kernel ngay lập tức. Cancellation bỏ kết quả và dọn queue; worker kết thúc phép inference đang chạy.
@@ -248,7 +248,7 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 
 ## Nguồn API chính thức
 
-- Qwen3-ASR model card: <https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf>
+- Qwen3-ASR model card: <https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf>
 - Qwen3.5-4B model card: <https://huggingface.co/Qwen/Qwen3.5-4B>
 - Qwen3.5:4b trên Ollama: <https://ollama.com/library/qwen3.5:4b>
 - Ollama local API: <https://docs.ollama.com/api/introduction>
