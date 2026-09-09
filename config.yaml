@@ -1,0 +1,63 @@
+audio:
+  sample_rate: 16000
+  channels: 1
+  block_size: 512
+  input_device: null
+  output_device: null
+  output_sample_rate: 48000
+  allow_barge_in: false
+  echo_guard_ms: 600
+
+vad:
+  threshold: 0.5
+  min_speech_ms: 250
+  min_silence_ms: 400
+  speech_pad_ms: 150
+
+asr:
+  model: Qwen/Qwen3-ASR-0.6B-hf
+  device: cuda
+  dtype: bfloat16
+  language: vi
+  max_new_tokens: 256
+
+llm:
+  backend: ollama
+  model: qwen3.5:4b
+  host: http://127.0.0.1:11434
+  keep_alive: -1
+  context_length: 4096
+  hf_model: Qwen/Qwen3.5-4B
+  device: cuda
+  dtype: bfloat16
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  max_tokens: 256
+  do_sample: true
+  enable_thinking: false
+
+web:
+  host: 127.0.0.1
+  port: 8080
+
+tts:
+  backend: onnx
+  device: cpu
+  precision: int8
+  voice: null
+  sample_rate: 48000
+
+tts_chunker:
+  min_chars: 15
+  preferred_chars: 60
+  max_chars: 120
+
+conversation:
+  max_history_turns: 20
+  system_prompt: |-
+    Bạn là trợ lý hội thoại cho một robot.
+    Hãy trả lời bằng tiếng Việt tự nhiên, ngắn gọn và phù hợp với hội thoại bằng giọng nói.
+    Không sử dụng Markdown trừ khi thật sự cần thiết.
+    Không trả lời quá dài nếu người dùng không yêu cầu.
+    Ưu tiên câu văn dễ chuyển thành tiếng nói.

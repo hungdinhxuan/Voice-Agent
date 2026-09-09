@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Voice Agent</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LOCAL · PRIVATE · VIETNAMESE</p>
+        <h1>Voice Agent</h1>
+      </div>
+      <div class="connection"><span id="connection-dot"></span><span id="connection">Đang kết nối</span></div>
+    </header>
+
+    <section class="status-card">
+      <div class="orb-wrap"><div id="orb" class="orb idle"></div></div>
+      <div class="status-copy">
+        <p class="label">Trạng thái</p>
+        <h2 id="state">Khởi động</h2>
+        <p id="hint">Đang tải model cục bộ…</p>
+      </div>
+      <div class="model-pill"><span id="backend">—</span><strong id="model">—</strong></div>
+    </section>
+
+    <section class="metrics" aria-label="Độ trễ">
+      <article><span>ASR</span><strong id="metric-asr">—</strong></article>
+      <article><span>First token</span><strong id="metric-first_token">—</strong></article>
+      <article><span>First audio</span><strong id="metric-first_audio">—</strong></article>
+      <article><span>Total</span><strong id="metric-total">—</strong></article>
+    </section>
+
+    <section class="conversation-card">
+      <div class="section-head">
+        <div><p class="label">Hội thoại</p><h2>Phiên hiện tại</h2></div>
+        <div class="actions">
+          <button id="interrupt" class="danger" type="button">Ngắt phản hồi</button>
+          <button id="clear" type="button">Xóa hội thoại</button>
+        </div>
+      </div>
+      <div id="conversation" class="conversation" aria-live="polite">
+        <div id="empty" class="empty">
+          <span class="wave">||||||||</span>
+          <p>Hãy nói vào microphone của máy.</p>
+          <small>Âm thanh dùng thiết bị trong config.yaml.</small>
+        </div>
+      </div>
+    </section>
+
+    <details class="logs-card">
+      <summary>Nhật ký hệ thống</summary>
+      <pre id="logs"></pre>
+    </details>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
+

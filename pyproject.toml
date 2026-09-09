@@ -1,0 +1,51 @@
+[project]
+name = "local-vietnamese-voice-agent"
+version = "0.1.0"
+description = "Fully local real-time Vietnamese voice conversation agent"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "accelerate>=1.10,<2",
+    "fastapi>=0.141,<0.142",
+    "httpx>=0.28,<0.29",
+    "numpy>=2.0,<3",
+    "pyyaml>=6.0.2,<7",
+    "silero-vad[onnx-cpu]>=6.2.1,<6.3",
+    "sounddevice>=0.5.3,<0.6",
+    "soundfile>=0.13,<0.14",
+    "soxr>=0.5,<1",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    "torchvision==0.23.0",
+    "transformers>=5.13.0,<5.14",
+    "uvicorn[standard]>=0.41,<0.42",
+    "vieneu>=3.2.3,<3.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.1,<2",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
