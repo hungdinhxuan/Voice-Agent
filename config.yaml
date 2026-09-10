@@ -5,7 +5,13 @@ audio:
   input_device: null
   output_device: null
   output_sample_rate: 48000
-  allow_barge_in: false
+  allow_barge_in: true
+  interrupt_phrases:
+    - dừng
+    - dừng lại
+    - ngừng
+    - ngừng lại
+    - thôi
   echo_guard_ms: 600
 
 vad:

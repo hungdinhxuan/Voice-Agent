@@ -11,10 +11,19 @@ def test_loads_repository_config() -> None:
     assert config.asr.language == "vi"
     assert config.asr.backend == "parakeet"
     assert config.asr.model == "nvidia/parakeet-ctc-0.6b-Vietnamese"
+    assert config.audio.allow_barge_in
+    assert "dừng lại" in config.audio.interrupt_phrases
 
 
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text("audio:\n  mystery: true\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="mystery"):
+        AppConfig.load(path)
+
+
+def test_rejects_empty_interrupt_phrases(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("audio:\n  interrupt_phrases: []\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="interrupt_phrases"):
         AppConfig.load(path)

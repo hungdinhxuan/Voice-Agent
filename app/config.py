@@ -20,7 +20,10 @@ class AudioConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     output_sample_rate: int = 48000
-    allow_barge_in: bool = False
+    allow_barge_in: bool = True
+    interrupt_phrases: list[str] = field(
+        default_factory=lambda: ["dừng", "dừng lại", "ngừng", "ngừng lại", "thôi"]
+    )
     echo_guard_ms: int = 600
 
 
@@ -124,6 +127,11 @@ class AppConfig:
             raise ConfigError("audio.block_size phải là 512 cho Silero VAD ở 16 kHz.")
         if self.audio.echo_guard_ms < 0:
             raise ConfigError("audio.echo_guard_ms không được âm.")
+        if not self.audio.interrupt_phrases or any(
+            not isinstance(phrase, str) or not phrase.strip()
+            for phrase in self.audio.interrupt_phrases
+        ):
+            raise ConfigError("audio.interrupt_phrases phải chứa ít nhất một cụm từ hợp lệ.")
         if self.asr.backend not in {"parakeet", "qwen3"}:
             raise ConfigError("asr.backend chỉ hỗ trợ parakeet hoặc qwen3.")
         if self.asr.backend == "parakeet" and not self.asr.checkpoint_file:

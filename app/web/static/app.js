@@ -5,8 +5,20 @@ const connection = document.querySelector('#connection');
 const connectionDot = document.querySelector('#connection-dot');
 const conversation = document.querySelector('#conversation');
 const logs = document.querySelector('#logs');
+const micButton = document.querySelector('#microphone');
+const micStatus = document.querySelector('#microphone-status');
 let socket;
 let assistantBubble = null;
+let ownsAudio = false;
+let microphoneStream = null;
+let captureContext = null;
+let captureNode = null;
+let playbackContext = null;
+let playbackTurn = null;
+let playbackCursor = 0;
+let playbackEndTimer = null;
+const playbackSources = new Set();
+const playbackStarted = new Set();
 
 const stateLabels = {
   IDLE: ['Sẵn sàng', 'Hãy nói vào microphone.'],
@@ -22,6 +34,8 @@ function connect() {
   socket.onopen = () => setConnection(true);
   socket.onclose = () => {
     setConnection(false);
+    stopMicrophone();
+    clearBrowserAudio();
     setTimeout(connect, 1500);
   };
   socket.onmessage = ({ data }) => handleEvent(JSON.parse(data));
@@ -38,6 +52,7 @@ function handleEvent(event) {
     document.querySelector('#model').textContent = event.model;
     if (event.models) renderModels(event.models);
     if (event.state) setState(event.state);
+    if (event.type === 'hello') configureAudioOwner(event.audio_owner);
   } else if (event.type === 'state') {
     setState(event.state);
   } else if (event.type === 'transcript') {
@@ -49,6 +64,12 @@ function handleEvent(event) {
     scrollConversation();
   } else if (event.type === 'assistant_done') {
     assistantBubble = null;
+  } else if (event.type === 'audio_chunk' && ownsAudio) {
+    playAudioChunk(event);
+  } else if (event.type === 'audio_end' && ownsAudio) {
+    finishAudioTurn(event.turn_id);
+  } else if (event.type === 'audio_clear' && ownsAudio) {
+    clearBrowserAudio();
   } else if (event.type === 'metric') {
     const target = document.querySelector(`#metric-${event.name}`);
     if (target) target.textContent = `${event.value} ${event.unit}`;
@@ -61,6 +82,132 @@ function handleEvent(event) {
     appendLog(event.message, 'error');
   }
   if (event.type === 'log') appendLog(event.message, event.level);
+}
+
+function configureAudioOwner(isOwner) {
+  ownsAudio = isOwner === true;
+  micButton.disabled = !ownsAudio;
+  micStatus.textContent = ownsAudio
+    ? 'Microphone và loa dùng trên trình duyệt này.'
+    : 'Tab khác đang giữ quyền audio.';
+}
+
+async function startMicrophone() {
+  if (!ownsAudio || captureContext) return;
+  try {
+    microphoneStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    captureContext = new AudioContextClass({ latencyHint: 'interactive' });
+    await captureContext.audioWorklet.addModule('/static/mic-processor.js');
+    const source = captureContext.createMediaStreamSource(microphoneStream);
+    captureNode = new AudioWorkletNode(captureContext, 'pcm-16k-processor', {
+      processorOptions: { targetSampleRate: 16000, frameSamples: 512 },
+    });
+    const silent = captureContext.createGain();
+    silent.gain.value = 0;
+    captureNode.port.onmessage = ({ data }) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(data);
+    };
+    source.connect(captureNode);
+    captureNode.connect(silent);
+    silent.connect(captureContext.destination);
+    await captureContext.resume();
+    await ensurePlaybackContext();
+    micButton.textContent = 'Tắt microphone';
+    micButton.classList.add('active');
+    micStatus.textContent = 'Đang dùng microphone và loa của trình duyệt.';
+  } catch (error) {
+    stopMicrophone();
+    micStatus.textContent = `Không mở được microphone: ${error.message}`;
+    appendLog(`Browser audio error: ${error.message}`, 'error');
+  }
+}
+
+function stopMicrophone() {
+  captureNode?.disconnect();
+  captureNode = null;
+  microphoneStream?.getTracks().forEach((track) => track.stop());
+  microphoneStream = null;
+  captureContext?.close();
+  captureContext = null;
+  micButton.textContent = 'Bật microphone';
+  micButton.classList.remove('active');
+  if (ownsAudio) micStatus.textContent = 'Microphone đang tắt.';
+}
+
+async function ensurePlaybackContext() {
+  if (!playbackContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    playbackContext = new AudioContextClass({ latencyHint: 'interactive' });
+  }
+  if (playbackContext.state === 'suspended') await playbackContext.resume();
+}
+
+function playAudioChunk(event) {
+  if (!playbackContext || playbackContext.state !== 'running') {
+    appendLog('Bật microphone để cho phép trình duyệt phát audio.', 'error');
+    return;
+  }
+  if (playbackTurn !== event.turn_id) {
+    clearBrowserAudio();
+    playbackTurn = event.turn_id;
+    playbackCursor = playbackContext.currentTime + 0.04;
+  }
+  const binary = atob(event.pcm);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const samples = new Float32Array(bytes.buffer);
+  const buffer = playbackContext.createBuffer(1, samples.length, event.sample_rate);
+  buffer.copyToChannel(samples, 0);
+  const source = playbackContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(playbackContext.destination);
+  const startsAt = Math.max(playbackCursor, playbackContext.currentTime + 0.01);
+  source.start(startsAt);
+  playbackCursor = startsAt + buffer.duration;
+  playbackSources.add(source);
+  source.onended = () => playbackSources.delete(source);
+  if (!playbackStarted.has(event.turn_id)) {
+    playbackStarted.add(event.turn_id);
+    sendAction('audio_started', { turn_id: event.turn_id });
+  }
+}
+
+function finishAudioTurn(turnId) {
+  if (turnId !== playbackTurn || !playbackContext) return;
+  const delay = Math.max(0, (playbackCursor - playbackContext.currentTime) * 1000);
+  clearTimeout(playbackEndTimer);
+  playbackEndTimer = setTimeout(() => {
+    sendAction('audio_drained', { turn_id: turnId });
+    playbackStarted.delete(turnId);
+    playbackTurn = null;
+    playbackEndTimer = null;
+  }, delay + 20);
+}
+
+function clearBrowserAudio() {
+  if (playbackTurn !== null) playbackStarted.delete(playbackTurn);
+  clearTimeout(playbackEndTimer);
+  playbackEndTimer = null;
+  for (const source of playbackSources) {
+    try { source.stop(); } catch (_) { /* already stopped */ }
+  }
+  playbackSources.clear();
+  playbackTurn = null;
+  playbackCursor = playbackContext?.currentTime || 0;
+}
+
+function sendAction(action, data = {}) {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action, ...data }));
+  }
 }
 
 function renderModels(models) {
@@ -122,14 +269,18 @@ function appendLog(message, level = 'info') {
 }
 
 function emptyMarkup() {
-  return `<div id="empty" class="empty"><span class="wave">||||||||</span><p>Hãy nói vào microphone của máy.</p><small>Âm thanh dùng thiết bị trong config.yaml.</small></div>`;
+  return `<div id="empty" class="empty"><span class="wave">||||||||</span><p>Hãy bật microphone và nói.</p><small>Âm thanh được thu và phát trên trình duyệt này.</small></div>`;
 }
 
+micButton.addEventListener('click', () => {
+  if (captureContext) stopMicrophone();
+  else startMicrophone();
+});
 document.querySelector('#interrupt').addEventListener('click', () => {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ action: 'interrupt' }));
+  sendAction('interrupt');
 });
 document.querySelector('#clear').addEventListener('click', () => {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ action: 'clear_history' }));
+  sendAction('clear_history');
 });
 
 connect();

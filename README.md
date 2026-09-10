@@ -24,7 +24,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 - Đã tích hợp VieNeu-TTS v3 Turbo qua SDK `vieneu`, backend ONNX/CPU và `infer_stream` native.
 - Đã có utterance segmentation, conversation history, text chunking, playback queue, latency logs và chế độ half-duplex chống trợ lý nghe lại chính loa.
 - Đã có test cho chunker, history, state, cancellation và config.
-- Đã có web dashboard local hiển thị state, transcript, phản hồi streaming, latency và log.
+- Đã có web voice client dùng microphone/loa của trình duyệt, đồng thời hiển thị state, transcript, phản hồi streaming, latency và log.
 
 Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB cho thấy Parakeet nhận đúng câu tiếng Việt mẫu dài 2,4 giây trong khoảng 0,39–0,55 giây. Full pipeline cùng TTS và Ollama cũng đã khởi động thành công. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
@@ -116,7 +116,7 @@ Liệt kê thiết bị:
 uv run python main.py --list-audio-devices
 ```
 
-Điền index hoặc tên thiết bị vào `audio.input_device` và `audio.output_device` trong `config.yaml`. Giá trị `null` dùng thiết bị mặc định.
+Điền index hoặc tên thiết bị vào `audio.input_device` và `audio.output_device` trong `config.yaml`. Giá trị `null` dùng thiết bị mặc định. Hai mục này chỉ áp dụng cho CLI; chế độ `--web` dùng thiết bị của browser.
 
 Kiểm tra từng phần:
 
@@ -139,11 +139,11 @@ Chạy web dashboard:
 uv run python main.py --web
 ```
 
-Mở <http://127.0.0.1:8080>. Dashboard dùng WebSocket local để nhận transcript, token, state và latency. Microphone và speaker vẫn chạy trực tiếp trên máy chủ Python; trình duyệt không thu hoặc phát audio.
+Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Tab kết nối đầu tiên giữ quyền audio; các tab sau chỉ xem dashboard. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
 
 Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON tương ứng được expose tại `GET /api/models`; trạng thái tiến trình nằm tại `GET /health`. Cả hai chỉ bind vào loopback theo `web.host` mặc định.
 
-Mặc định ứng dụng chỉ thu khi trợ lý đã nói xong. Trong lúc `PROCESSING` hoặc `SPEAKING`, frame microphone bị bỏ qua; sau playback có thêm khoảng chống âm vang. Dùng nút **Ngắt phản hồi** nếu muốn dừng trợ lý ngay.
+Khi agent đang nói, browser vẫn thu để nhận lệnh ngắt. Chỉ câu khớp `audio.interrupt_phrases` như `dừng`, `dừng lại`, `ngừng`, `thôi` mới hủy LLM và playback; câu khác bị bỏ qua. Nút **Ngắt phản hồi** vẫn dừng ngay lập tức.
 
 ## Cấu hình chính
 
@@ -155,7 +155,8 @@ Chỉnh `config.yaml`:
 - `asr.backend`: mặc định `parakeet`; đặt `qwen3` cùng model Qwen tương ứng để rollback.
 - `asr.checkpoint_file`: tên checkpoint `.nemo` trong repository Parakeet.
 - `audio.echo_guard_ms`: thời gian chờ sau khi loa dừng trước khi mở thu lại; mặc định `600` ms.
-- `audio.allow_barge_in`: mặc định `false`. Chỉ bật khi dùng headphones hoặc đã có acoustic echo cancellation.
+- `audio.allow_barge_in`: mặc định `true`. Khi agent đang nói, chỉ các câu khớp chính xác `audio.interrupt_phrases` (ví dụ `dừng`, `dừng lại`) mới hủy LLM/TTS; câu khác bị bỏ qua. Nên dùng headphones vì chưa có acoustic echo cancellation.
+- `audio.interrupt_phrases`: danh sách câu lệnh giọng nói dùng để ngắt phản hồi đang phát.
 - `llm.max_tokens`: giới hạn độ dài trả lời và thời gian giữ GPU.
 - `llm.enable_thinking`: giữ `false` để tránh phát nội dung suy luận và giảm độ trễ hội thoại.
 - `llm.backend`: mặc định `ollama`; đặt `transformers` để dùng backend cũ.
@@ -203,10 +204,12 @@ VoiceOrchestrator
                                          |
                                   SpeakerOutput queue
 
-VoiceOrchestrator ---- EventBroker ---- WebSocket ---- local web dashboard
+Browser microphone -- PCM 16 kHz/WebSocket -- VoiceOrchestrator
+VoiceOrchestrator -- TTS PCM/WebSocket -- Browser speaker
+VoiceOrchestrator ---- EventBroker ---- WebSocket ---- web dashboard
 ```
 
-Các interface ASR, LLM và TTS nằm trong `app/*/base.py`. Audio transport chỉ tiếp xúc với orchestrator. Cấu trúc này cho phép thay microphone/speaker bằng WebSocket + Opus sau milestone 1 mà không đổi model service.
+Các interface ASR, LLM và TTS nằm trong `app/*/base.py`. Audio transport chỉ tiếp xúc với orchestrator. Web dùng PCM float32 để giữ đường truyền đơn giản trên loopback; CLI giữ PortAudio cho vận hành trực tiếp trên host.
 
 ## Test
 

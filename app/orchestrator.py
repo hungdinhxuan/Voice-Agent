@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
+import unicodedata
 from collections.abc import Callable
 from typing import Any
 
@@ -10,7 +12,7 @@ import numpy as np
 
 from app.asr.factory import create_asr_service
 from app.audio.input import MicrophoneInput
-from app.audio.output import SpeakerOutput
+from app.audio.output import AudioOutput, SpeakerOutput
 from app.cancellation import TurnCancellation
 from app.config import AppConfig
 from app.conversation.chunker import StreamingTextChunker
@@ -26,7 +28,14 @@ EventHandler = Callable[[dict[str, Any]], None]
 
 
 class VoiceOrchestrator:
-    def __init__(self, config: AppConfig, event_handler: EventHandler | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        event_handler: EventHandler | None = None,
+        *,
+        speaker: AudioOutput | None = None,
+        use_local_microphone: bool = True,
+    ) -> None:
         self.config = config
         self._event_handler = event_handler
         self.state = StateMachine()
@@ -38,11 +47,15 @@ class VoiceOrchestrator:
         self.asr = create_asr_service(config.asr)
         self.llm = create_llm_service(config.llm)
         self.tts = VieNeuTTSService(config.tts)
-        self.speaker = SpeakerOutput(config.audio)
+        self.speaker = speaker or SpeakerOutput(config.audio)
+        self._audio_frames: asyncio.Queue[np.ndarray] | None = (
+            None if use_local_microphone else asyncio.Queue(maxsize=64)
+        )
         self._turn_task: asyncio.Task[None] | None = None
         self._cancellation: TurnCancellation | None = None
         self._turn_id = 0
         self._listen_after = 0.0
+        self._interrupt_candidate = False
 
     async def run(self) -> None:
         speaker_started = False
@@ -78,19 +91,14 @@ class VoiceOrchestrator:
             await self.llm.close()
 
     async def _listen_forever(self) -> None:
+        if self._audio_frames is not None:
+            await self._listen_to_browser()
+            return
         while True:
             try:
                 async with MicrophoneInput(self.config.audio) as microphone:
                     async for frame in microphone.frames():
-                        assert self.vad is not None
-                        if not self._microphone_is_open():
-                            self.vad.reset()
-                            continue
-                        for event in self.vad.process(frame):
-                            if event.kind is VADEventType.SPEECH_START:
-                                await self._on_speech_start()
-                            elif event.audio is not None:
-                                await self._on_speech_end(event.audio)
+                        await self._process_audio_frame(frame)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -104,20 +112,67 @@ class VoiceOrchestrator:
                 self._log("[AUDIO] Thử kết nối lại sau 1 giây...")
                 await asyncio.sleep(1)
 
+    async def _listen_to_browser(self) -> None:
+        assert self._audio_frames is not None
+        while True:
+            frame = await self._audio_frames.get()
+            await self._process_audio_frame(frame)
+
+    async def _process_audio_frame(self, frame: np.ndarray) -> None:
+        assert self.vad is not None
+        if not self._microphone_is_open():
+            self.vad.reset()
+            return
+        for event in self.vad.process(frame):
+            if event.kind is VADEventType.SPEECH_START:
+                await self._on_speech_start()
+            elif event.audio is not None:
+                await self._on_speech_end(event.audio)
+
+    def feed_audio(self, frame: np.ndarray) -> None:
+        if self._audio_frames is None:
+            raise RuntimeError("Orchestrator đang dùng microphone cục bộ.")
+        audio = np.asarray(frame, dtype=np.float32).reshape(-1)
+        if audio.size != self.config.audio.block_size:
+            raise ValueError(
+                f"Browser audio cần {self.config.audio.block_size} samples, nhận {audio.size}."
+            )
+        if self._audio_frames.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._audio_frames.get_nowait()
+        self._audio_frames.put_nowait(audio.copy())
+
+    async def disconnect_audio_client(self) -> None:
+        if self.state.state in {ConversationState.PROCESSING, ConversationState.SPEAKING}:
+            await self.interrupt(source="browser disconnect")
+        elif self.state.state is ConversationState.LISTENING:
+            self._transition(ConversationState.IDLE)
+        self._interrupt_candidate = False
+        if self.vad is not None:
+            self.vad.reset()
+        if self._audio_frames is not None:
+            while not self._audio_frames.empty():
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self._audio_frames.get_nowait()
+
     async def _on_speech_start(self) -> None:
         if not self._microphone_is_open():
             return
         self._log("[VAD] speech started")
         if self._turn_task is not None and not self._turn_task.done():
-            self._transition(ConversationState.INTERRUPTED)
-            self._log("[APP] interrupted")
-            await self._cancel_turn()
+            self._interrupt_candidate = True
+            self._log("[APP] checking voice interrupt")
+            return
         self._transition(ConversationState.LISTENING)
 
     async def _on_speech_end(self, audio: np.ndarray) -> None:
         duration = audio.size / self.config.audio.sample_rate
         self._log(f"[VAD] speech ended: {duration:.2f} s")
         self._emit("metric", name="utterance", value=round(duration * 1000), unit="ms")
+        if self._interrupt_candidate:
+            self._interrupt_candidate = False
+            await self._handle_interrupt_candidate(audio)
+            return
         self._transition(ConversationState.PROCESSING)
         self._turn_id += 1
         cancellation = TurnCancellation()
@@ -129,6 +184,7 @@ class VoiceOrchestrator:
         )
 
     async def _cancel_turn(self) -> None:
+        self._interrupt_candidate = False
         if self._cancellation is not None:
             self._cancellation.cancel()
         await self.speaker.clear()
@@ -138,6 +194,23 @@ class VoiceOrchestrator:
                 await self._turn_task
         self._turn_task = None
         self._cancellation = None
+
+    async def _handle_interrupt_candidate(self, audio: np.ndarray) -> None:
+        cancellation = TurnCancellation()
+        try:
+            text = await self.asr.transcribe(audio, self.config.audio.sample_rate, cancellation)
+        except Exception as exc:
+            self._log(
+                f"[ASR] interrupt detection error: {type(exc).__name__}: {exc}",
+                level="error",
+            )
+            return
+        self._log(f"[ASR] interrupt candidate: {text}")
+        if not _matches_interrupt_phrase(text, self.config.audio.interrupt_phrases):
+            self._log("[APP] voice interrupt ignored")
+            return
+        self._emit("transcript", text=text)
+        await self.interrupt(source="voice command")
 
     async def _process_turn(
         self,
@@ -270,13 +343,13 @@ class VoiceOrchestrator:
                     self._transition(ConversationState.SPEAKING)
                 await self.speaker.enqueue(turn_id, audio)
 
-    async def interrupt(self) -> None:
+    async def interrupt(self, source: str = "web UI") -> None:
         if self.state.state not in {ConversationState.PROCESSING, ConversationState.SPEAKING}:
             return
         self._transition(ConversationState.INTERRUPTED)
         await self._cancel_turn()
         self._transition(ConversationState.IDLE)
-        self._log("[APP] interrupted from web UI")
+        self._log(f"[APP] interrupted from {source}")
 
     def clear_history(self) -> None:
         self.history.clear()
@@ -325,3 +398,13 @@ def _usable_transcript(text: str) -> bool:
         for character in letters
     )
     return latin_letters / len(letters) >= 0.8
+
+
+def _matches_interrupt_phrase(text: str, phrases: list[str]) -> bool:
+    normalized_text = _normalize_phrase(text)
+    return normalized_text in {_normalize_phrase(phrase) for phrase in phrases}
+
+
+def _normalize_phrase(text: str) -> str:
+    normalized = unicodedata.normalize("NFC", text).casefold()
+    return " ".join(re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE).split())

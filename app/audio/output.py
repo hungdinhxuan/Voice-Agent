@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import sounddevice as sd
@@ -14,6 +14,22 @@ from app.config import AudioConfig
 class AudioPacket:
     turn_id: int
     samples: np.ndarray
+
+
+class AudioOutput(Protocol):
+    async def start(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    def begin_turn(self, turn_id: int) -> None: ...
+
+    async def enqueue(self, turn_id: int, samples: np.ndarray) -> None: ...
+
+    async def wait_first_played(self, turn_id: int) -> None: ...
+
+    async def wait_drained(self, turn_id: int) -> None: ...
+
+    async def clear(self) -> None: ...
 
 
 class SpeakerOutput:

@@ -22,8 +22,12 @@
         <p class="label">Trạng thái</p>
         <h2 id="state">Khởi động</h2>
         <p id="hint">Đang tải model cục bộ…</p>
+        <p id="microphone-status" class="microphone-status">Đang chờ quyền audio…</p>
       </div>
-      <div class="model-pill"><span id="backend">—</span><strong id="model">—</strong></div>
+      <div class="status-actions">
+        <div class="model-pill"><span id="backend">—</span><strong id="model">—</strong></div>
+        <button id="microphone" type="button" disabled>Bật microphone</button>
+      </div>
     </section>
 
     <section class="models-card" aria-labelledby="models-title">
@@ -52,8 +56,8 @@
       <div id="conversation" class="conversation" aria-live="polite">
         <div id="empty" class="empty">
           <span class="wave">||||||||</span>
-          <p>Hãy nói vào microphone của máy.</p>
-          <small>Âm thanh dùng thiết bị trong config.yaml.</small>
+          <p>Hãy bật microphone và nói.</p>
+          <small>Âm thanh được thu và phát trên trình duyệt này.</small>
         </div>
       </div>
     </section>

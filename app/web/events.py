@@ -16,7 +16,8 @@ class EventBroker:
     def publish(self, event: dict[str, Any]) -> None:
         self._sequence += 1
         enriched = {"id": self._sequence, "time": time.time(), **event}
-        self._history.append(enriched)
+        if event.get("type") not in {"audio_chunk", "audio_end", "audio_clear"}:
+            self._history.append(enriched)
         for queue in tuple(self._subscribers):
             if queue.full():
                 try:
@@ -35,4 +36,3 @@ class EventBroker:
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._subscribers.discard(queue)
-

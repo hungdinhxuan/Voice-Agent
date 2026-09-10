@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 import uvicorn
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import AppConfig
 from app.orchestrator import VoiceOrchestrator
+from app.web.audio import BrowserAudioOutput
 from app.web.events import EventBroker
 from app.web.model_catalog import build_model_catalog
 
@@ -21,6 +24,7 @@ STATIC_DIR = Path(__file__).with_name("static")
 
 def create_web_app(config: AppConfig) -> FastAPI:
     broker = EventBroker()
+    audio_owner: WebSocket | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -29,8 +33,15 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 event = {**event, "models": build_model_catalog(config)}
             broker.publish(event)
 
-        orchestrator = VoiceOrchestrator(config, event_handler=publish)
+        browser_speaker = BrowserAudioOutput(config.audio, publish)
+        orchestrator = VoiceOrchestrator(
+            config,
+            event_handler=publish,
+            speaker=browser_speaker,
+            use_local_microphone=False,
+        )
         app.state.orchestrator = orchestrator
+        app.state.browser_speaker = browser_speaker
         app.state.broker = broker
         task = asyncio.create_task(orchestrator.run(), name="voice-orchestrator")
 
@@ -75,7 +86,11 @@ def create_web_app(config: AppConfig) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
+        nonlocal audio_owner
         await websocket.accept()
+        owns_audio = audio_owner is None
+        if owns_audio:
+            audio_owner = websocket
         queue = broker.subscribe()
         await websocket.send_json(
             {
@@ -86,10 +101,20 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 "asr_model": config.asr.model,
                 "models": build_model_catalog(config),
                 "state": app.state.orchestrator.state.state.value,
+                "audio_owner": owns_audio,
+                "audio_mode": "browser",
             }
         )
         sender = asyncio.create_task(_send_events(websocket, queue))
-        receiver = asyncio.create_task(_receive_actions(websocket, app.state.orchestrator))
+        receiver = asyncio.create_task(
+            _receive_actions(
+                websocket,
+                app.state.orchestrator,
+                app.state.browser_speaker,
+                owns_audio=owns_audio,
+                frame_samples=config.audio.block_size,
+            )
+        )
         try:
             done, pending = await asyncio.wait(
                 {sender, receiver},
@@ -100,6 +125,9 @@ def create_web_app(config: AppConfig) -> FastAPI:
             await asyncio.gather(*done, *pending, return_exceptions=True)
         finally:
             broker.unsubscribe(queue)
+            if owns_audio and audio_owner is websocket:
+                audio_owner = None
+                await app.state.orchestrator.disconnect_audio_client()
 
     return app
 
@@ -112,17 +140,49 @@ async def _send_events(
         await websocket.send_json(await queue.get())
 
 
-async def _receive_actions(websocket: WebSocket, orchestrator: VoiceOrchestrator) -> None:
+async def _receive_actions(
+    websocket: WebSocket,
+    orchestrator: VoiceOrchestrator,
+    browser_speaker: BrowserAudioOutput,
+    *,
+    owns_audio: bool,
+    frame_samples: int,
+) -> None:
     try:
         while True:
-            message = await websocket.receive_json()
+            packet = await websocket.receive()
+            if packet["type"] == "websocket.disconnect":
+                return
+            payload = packet.get("bytes")
+            if payload is not None:
+                if owns_audio:
+                    orchestrator.feed_audio(decode_browser_audio(payload, frame_samples))
+                continue
+            raw_message = packet.get("text")
+            if raw_message is None:
+                continue
+            message = json.loads(raw_message)
             action = message.get("action")
             if action == "interrupt":
                 await orchestrator.interrupt()
             elif action == "clear_history":
                 orchestrator.clear_history()
+            elif owns_audio and action == "audio_started":
+                browser_speaker.mark_started(int(message["turn_id"]))
+            elif owns_audio and action == "audio_drained":
+                browser_speaker.mark_drained(int(message["turn_id"]))
     except WebSocketDisconnect:
         return
+
+
+def decode_browser_audio(payload: bytes, frame_samples: int) -> np.ndarray:
+    expected_bytes = frame_samples * np.dtype("<f4").itemsize
+    if len(payload) != expected_bytes:
+        raise ValueError(f"Browser audio cần {expected_bytes} bytes, nhận {len(payload)}.")
+    frame = np.frombuffer(payload, dtype="<f4").copy()
+    if not np.isfinite(frame).all():
+        raise ValueError("Browser audio chứa sample không hữu hạn.")
+    return frame
 
 
 async def serve_web(config: AppConfig) -> None:
