@@ -34,7 +34,9 @@ class VADConfig:
 
 @dataclass(slots=True)
 class ASRConfig:
-    model: str = "Qwen/Qwen3-ASR-1.7B-hf"
+    backend: str = "parakeet"
+    model: str = "nvidia/parakeet-ctc-0.6b-Vietnamese"
+    checkpoint_file: str = "parakeet-ctc-0.6b-vi.nemo"
     device: str = "cuda"
     dtype: str = "bfloat16"
     language: str | None = "vi"
@@ -122,6 +124,10 @@ class AppConfig:
             raise ConfigError("audio.block_size phải là 512 cho Silero VAD ở 16 kHz.")
         if self.audio.echo_guard_ms < 0:
             raise ConfigError("audio.echo_guard_ms không được âm.")
+        if self.asr.backend not in {"parakeet", "qwen3"}:
+            raise ConfigError("asr.backend chỉ hỗ trợ parakeet hoặc qwen3.")
+        if self.asr.backend == "parakeet" and not self.asr.checkpoint_file:
+            raise ConfigError("asr.checkpoint_file không được rỗng với Parakeet.")
         if not 0 < self.vad.threshold < 1:
             raise ConfigError("vad.threshold phải nằm giữa 0 và 1.")
         if min(self.vad.min_speech_ms, self.vad.min_silence_ms, self.vad.speech_pad_ms) < 0:

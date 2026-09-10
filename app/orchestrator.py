@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from app.asr.qwen3_asr import Qwen3ASRService
+from app.asr.factory import create_asr_service
 from app.audio.input import MicrophoneInput
 from app.audio.output import SpeakerOutput
 from app.cancellation import TurnCancellation
@@ -35,7 +35,7 @@ class VoiceOrchestrator:
             config.conversation.max_history_turns,
         )
         self.vad: SileroVADSegmenter | None = None
-        self.asr = Qwen3ASRService(config.asr)
+        self.asr = create_asr_service(config.asr)
         self.llm = create_llm_service(config.llm)
         self.tts = VieNeuTTSService(config.tts)
         self.speaker = SpeakerOutput(config.audio)
@@ -54,7 +54,7 @@ class VoiceOrchestrator:
                 self.config.audio.sample_rate,
                 self.config.audio.block_size,
             )
-            self._log("[APP] Đang load Qwen3-ASR...")
+            self._log(f"[APP] Đang load ASR {self.config.asr.backend}/{self.config.asr.model}...")
             await self.asr.load()
             self._log(f"[APP] Đang load LLM backend {self.config.llm.backend}...")
             await self.llm.load()
@@ -63,7 +63,13 @@ class VoiceOrchestrator:
             await self.speaker.start()
             speaker_started = True
             self._log("[APP] Sẵn sàng. Hãy nói tiếng Việt. Nhấn Ctrl+C để dừng.")
-            self._emit("ready", backend=self.config.llm.backend, model=self.config.llm.model)
+            self._emit(
+                "ready",
+                backend=self.config.llm.backend,
+                model=self.config.llm.model,
+                asr_backend=self.config.asr.backend,
+                asr_model=self.config.asr.model,
+            )
             await self._listen_forever()
         finally:
             await self._cancel_turn()

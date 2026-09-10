@@ -59,6 +59,8 @@ def create_web_app(config: AppConfig) -> FastAPI:
             "state": app.state.orchestrator.state.state.value,
             "backend": config.llm.backend,
             "model": config.llm.model,
+            "asr_backend": config.asr.backend,
+            "asr_model": config.asr.model,
         }
 
     @app.websocket("/ws")
@@ -70,6 +72,8 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 "type": "hello",
                 "backend": config.llm.backend,
                 "model": config.llm.model,
+                "asr_backend": config.asr.backend,
+                "asr_model": config.asr.model,
                 "state": app.state.orchestrator.state.state.value,
             }
         )
@@ -121,4 +125,3 @@ async def serve_web(config: AppConfig) -> None:
         )
     )
     await server.serve()
-

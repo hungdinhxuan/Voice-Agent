@@ -5,7 +5,7 @@
 ```text
 Microphone (16 kHz mono)
   -> Silero VAD (ONNX/CPU)
-  -> Qwen3-ASR-1.7B (GPU)
+  -> NVIDIA Parakeet CTC 0.6B Vietnamese (GPU)
   -> Qwen3.5-4B Q4_K_M qua Ollama, streaming text (GPU)
   -> sentence chunker
   -> VieNeu-TTS v3 Turbo (ONNX/CPU)
@@ -18,7 +18,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 ## Trạng thái tích hợp
 
 - Đã tích hợp Silero VAD qua API Python chính thức và ONNX Runtime.
-- Đã tích hợp `Qwen/Qwen3-ASR-1.7B-hf` qua Transformers native `apply_transcription_request`.
+- Đã tích hợp `nvidia/parakeet-ctc-0.6b-Vietnamese` qua NVIDIA NeMo 2.6.
 - Đã tích hợp `qwen3.5:4b` qua Ollama local API, streaming NDJSON và giữ model trong VRAM.
 - Transformers vẫn là backend dự phòng qua `llm.backend: transformers`.
 - Đã tích hợp VieNeu-TTS v3 Turbo qua SDK `vieneu`, backend ONNX/CPU và `infer_stream` native.
@@ -26,7 +26,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 - Đã có test cho chunker, history, state, cancellation và config.
 - Đã có web dashboard local hiển thị state, transcript, phản hồi streaming, latency và log.
 
-Unit test không tải model. Smoke test ngày 09/09/2026 trên RTX 5070 Ti 16 GB đã xác nhận Qwen3-ASR-1.7B nhận đúng câu tiếng Việt mẫu, cùng với TTS, Ollama và backend Transformers cũ. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
+Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB cho thấy Parakeet nhận đúng câu tiếng Việt mẫu dài 2,4 giây trong khoảng 0,39–0,55 giây. Full pipeline cùng TTS và Ollama cũng đã khởi động thành công. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
 ## Yêu cầu
 
@@ -45,7 +45,7 @@ sudo apt update
 sudo apt install libportaudio2 portaudio19-dev
 ```
 
-Windows dùng wheel `sounddevice`; thường không cần cài PortAudio riêng.
+Windows dùng wheel `sounddevice`; thường không cần cài PortAudio riêng. NVIDIA ưu tiên NeMo trên Linux, nên project khóa bộ dependency inference tối thiểu đã được smoke-test trên Windows; các tính năng train và CTC alignment không nằm trong phạm vi app.
 
 ## Cài đặt
 
@@ -72,10 +72,10 @@ ollama serve
 ollama ps
 ```
 
-Tải Qwen3-ASR vào Hugging Face cache:
+Tải Parakeet vào Hugging Face cache:
 
 ```bash
-uv run hf download Qwen/Qwen3-ASR-1.7B-hf
+uv run hf download nvidia/parakeet-ctc-0.6b-Vietnamese parakeet-ctc-0.6b-vi.nemo
 ```
 
 Chỉ tải model Transformers LLM nếu dùng backend dự phòng:
@@ -150,6 +150,8 @@ Chỉnh `config.yaml`:
 - `vad.threshold`: tăng nếu tiếng ồn gây false positive; giảm nếu giọng nhỏ không được nhận.
 - `vad.min_speech_ms`: thời lượng tối thiểu trước khi xác nhận speech start.
 - `vad.min_silence_ms`: khoảng im lặng kết thúc utterance. Giá trị nhỏ giảm latency nhưng dễ cắt câu.
+- `asr.backend`: mặc định `parakeet`; đặt `qwen3` cùng model Qwen tương ứng để rollback.
+- `asr.checkpoint_file`: tên checkpoint `.nemo` trong repository Parakeet.
 - `audio.echo_guard_ms`: thời gian chờ sau khi loa dừng trước khi mở thu lại; mặc định `600` ms.
 - `audio.allow_barge_in`: mặc định `false`. Chỉ bật khi dùng headphones hoặc đã có acoustic echo cancellation.
 - `llm.max_tokens`: giới hạn độ dài trả lời và thời gian giữ GPU.
@@ -187,7 +189,7 @@ SileroVADSegmenter ---- speech start ---- cancel current TurnCancellation
 speech end
       |
 VoiceOrchestrator
-      |---- Qwen3ASRService
+      |---- ParakeetCTCService
       |---- ConversationHistory
       |---- Qwen35Service -------- token stream
       |                                  |
@@ -240,7 +242,7 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 - Chưa có acoustic echo cancellation. Chế độ half-duplex mặc định tránh speaker kích hoạt VAD khi dùng loa ngoài.
 - ASR chạy theo utterance, chưa dùng streaming ASR.
 - Backend Ollama dùng Q4_K_M. Chất lượng có thể thấp hơn checkpoint BF16 Transformers một ít.
-- Ollama `qwen3.5:4b` và Qwen3-ASR-1.7B chạy đồng thời trong giới hạn VRAM 16 GB trên máy smoke test.
+- Ollama `qwen3.5:4b` và Parakeet CTC 0.6B chạy đồng thời trong giới hạn VRAM 16 GB trên máy smoke test.
 - Web UI hiện là dashboard điều khiển pipeline audio của máy chủ. Chưa dùng microphone/audio playback của trình duyệt.
 - Backend Transformers vẫn dùng torch fallback nếu chọn lại; smoke test cũ đo first text khoảng 1.5 giây.
 - Một lệnh TTS hoặc ASR đang chạy trong worker thread không thể dừng kernel ngay lập tức. Cancellation bỏ kết quả và dọn queue; worker kết thúc phép inference đang chạy.
@@ -248,7 +250,8 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 
 ## Nguồn API chính thức
 
-- Qwen3-ASR model card: <https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf>
+- NVIDIA Parakeet Vietnamese model card: <https://huggingface.co/nvidia/parakeet-ctc-0.6b-Vietnamese>
+- NVIDIA NeMo ASR: <https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/intro.html>
 - Qwen3.5-4B model card: <https://huggingface.co/Qwen/Qwen3.5-4B>
 - Qwen3.5:4b trên Ollama: <https://ollama.com/library/qwen3.5:4b>
 - Ollama local API: <https://docs.ollama.com/api/introduction>

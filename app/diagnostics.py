@@ -7,7 +7,7 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-from app.asr.qwen3_asr import Qwen3ASRService
+from app.asr.factory import create_asr_service
 from app.audio.input import MicrophoneInput
 from app.audio.output import SpeakerOutput
 from app.cancellation import TurnCancellation
@@ -55,8 +55,8 @@ async def test_asr(config: AppConfig, path: Path) -> None:
         audio = np.mean(audio, axis=1)
     if sample_rate != config.audio.sample_rate:
         audio = await asyncio.to_thread(soxr.resample, audio, sample_rate, config.audio.sample_rate)
-    service = Qwen3ASRService(config.asr)
-    print("[ASR] Đang load Qwen3-ASR...")
+    service = create_asr_service(config.asr)
+    print(f"[ASR] Đang load {config.asr.backend}/{config.asr.model}...")
     await service.load()
     text = await service.transcribe(audio, config.audio.sample_rate)
     print(f"[ASR] {text}")

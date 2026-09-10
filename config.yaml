@@ -15,7 +15,9 @@ vad:
   speech_pad_ms: 150
 
 asr:
-  model: Qwen/Qwen3-ASR-1.7B-hf
+  backend: parakeet
+  model: nvidia/parakeet-ctc-0.6b-Vietnamese
+  checkpoint_file: parakeet-ctc-0.6b-vi.nemo
   device: cuda
   dtype: bfloat16
   language: vi
