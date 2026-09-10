@@ -141,6 +141,8 @@ uv run python main.py --web
 
 Mở <http://127.0.0.1:8080>. Dashboard dùng WebSocket local để nhận transcript, token, state và latency. Microphone và speaker vẫn chạy trực tiếp trên máy chủ Python; trình duyệt không thu hoặc phát audio.
 
+Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON tương ứng được expose tại `GET /api/models`; trạng thái tiến trình nằm tại `GET /health`. Cả hai chỉ bind vào loopback theo `web.host` mặc định.
+
 Mặc định ứng dụng chỉ thu khi trợ lý đã nói xong. Trong lúc `PROCESSING` hoặc `SPEAKING`, frame microphone bị bỏ qua; sau playback có thêm khoảng chống âm vang. Dùng nút **Ngắt phản hồi** nếu muốn dừng trợ lý ngay.
 
 ## Cấu hình chính

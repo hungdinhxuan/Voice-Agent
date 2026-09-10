@@ -36,6 +36,7 @@ function handleEvent(event) {
   if (event.type === 'hello' || event.type === 'ready') {
     document.querySelector('#backend').textContent = event.backend;
     document.querySelector('#model').textContent = event.model;
+    if (event.models) renderModels(event.models);
     if (event.state) setState(event.state);
   } else if (event.type === 'state') {
     setState(event.state);
@@ -60,6 +61,33 @@ function handleEvent(event) {
     appendLog(event.message, 'error');
   }
   if (event.type === 'log') appendLog(event.message, event.level);
+}
+
+function renderModels(models) {
+  const container = document.querySelector('#models');
+  container.replaceChildren();
+  for (const [kind, details] of Object.entries(models)) {
+    const card = document.createElement('article');
+    card.className = 'model-card';
+    const heading = document.createElement('div');
+    heading.className = 'model-card-head';
+    const badge = document.createElement('span');
+    badge.textContent = kind.toUpperCase();
+    const title = document.createElement('strong');
+    title.textContent = details.model;
+    heading.append(badge, title);
+    const fields = document.createElement('dl');
+    for (const [key, value] of Object.entries(details)) {
+      if (key === 'model' || value === null || value === undefined) continue;
+      const term = document.createElement('dt');
+      term.textContent = key.replaceAll('_', ' ');
+      const description = document.createElement('dd');
+      description.textContent = String(value);
+      fields.append(term, description);
+    }
+    card.append(heading, fields);
+    container.append(card);
+  }
 }
 
 function setState(state) {
@@ -105,4 +133,3 @@ document.querySelector('#clear').addEventListener('click', () => {
 });
 
 connect();
-

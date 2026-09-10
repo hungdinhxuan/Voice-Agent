@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import AppConfig
 from app.orchestrator import VoiceOrchestrator
 from app.web.events import EventBroker
+from app.web.model_catalog import build_model_catalog
 
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -23,7 +24,12 @@ def create_web_app(config: AppConfig) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        orchestrator = VoiceOrchestrator(config, event_handler=broker.publish)
+        def publish(event: dict[str, Any]) -> None:
+            if event.get("type") == "ready":
+                event = {**event, "models": build_model_catalog(config)}
+            broker.publish(event)
+
+        orchestrator = VoiceOrchestrator(config, event_handler=publish)
         app.state.orchestrator = orchestrator
         app.state.broker = broker
         task = asyncio.create_task(orchestrator.run(), name="voice-orchestrator")
@@ -63,6 +69,10 @@ def create_web_app(config: AppConfig) -> FastAPI:
             "asr_model": config.asr.model,
         }
 
+    @app.get("/api/models")
+    async def models() -> dict[str, Any]:
+        return {"models": build_model_catalog(config)}
+
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -74,6 +84,7 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 "model": config.llm.model,
                 "asr_backend": config.asr.backend,
                 "asr_model": config.asr.model,
+                "models": build_model_catalog(config),
                 "state": app.state.orchestrator.state.state.value,
             }
         )

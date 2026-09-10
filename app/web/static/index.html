@@ -26,6 +26,14 @@
       <div class="model-pill"><span id="backend">—</span><strong id="model">—</strong></div>
     </section>
 
+    <section class="models-card" aria-labelledby="models-title">
+      <div class="models-head">
+        <div><p class="label">Model runtime</p><h2 id="models-title">Pipeline đang sử dụng</h2></div>
+        <a href="/api/models" target="_blank" rel="noreferrer">Mở API JSON</a>
+      </div>
+      <div id="models" class="model-grid" aria-live="polite"></div>
+    </section>
+
     <section class="metrics" aria-label="Độ trễ">
       <article><span>ASR</span><strong id="metric-asr">—</strong></article>
       <article><span>First token</span><strong id="metric-first_token">—</strong></article>
@@ -58,4 +66,3 @@
   <script src="/static/app.js" defer></script>
 </body>
 </html>
-

@@ -35,7 +35,7 @@ h2 { font-size: 20px; }
 #connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #4c5662; }
 #connection-dot.online { background: var(--mint); box-shadow: 0 0 14px rgba(98, 242, 187, .7); }
 
-.status-card, .conversation-card, .logs-card {
+.status-card, .models-card, .conversation-card, .logs-card {
   border: 1px solid var(--line);
   background: rgba(16, 21, 28, .86);
   box-shadow: 0 24px 60px rgba(0, 0, 0, .24);
@@ -55,6 +55,20 @@ h2 { font-size: 20px; }
 .model-pill span, .model-pill strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-pill span { color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .model-pill strong { margin-top: 3px; font-size: 13px; }
+
+.models-card { margin-top: 14px; border-radius: 20px; padding: 20px; }
+.models-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.models-head .label { margin-bottom: 6px; }
+.models-head a { color: var(--blue); font-size: 12px; text-decoration: none; }
+.models-head a:hover { text-decoration: underline; }
+.model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.model-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 15px; background: var(--panel-2); }
+.model-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.model-card-head span { color: var(--mint); font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+.model-card-head strong { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.model-card dl { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(0, 1.3fr); gap: 7px 12px; margin: 12px 0 0; font-size: 11px; }
+.model-card dt { color: var(--muted); text-transform: capitalize; }
+.model-card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #d9e0e7; text-align: right; }
 
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 14px 0; }
 .metrics article { padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: rgba(21, 28, 36, .75); }
@@ -94,9 +108,9 @@ button.danger { color: #ffadb1; border-color: rgba(255,107,114,.32); }
   .status-card { grid-template-columns: auto 1fr; padding: 20px; }
   .model-pill { grid-column: 1 / -1; max-width: none; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
+  .model-grid { grid-template-columns: 1fr; }
   .section-head { align-items: flex-start; flex-direction: column; }
   .actions { width: 100%; }
   button { flex: 1; }
   .message { max-width: 92%; }
 }
-
