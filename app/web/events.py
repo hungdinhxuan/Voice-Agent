@@ -12,6 +12,11 @@ class EventBroker:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._queue_size = queue_size
         self._sequence = 0
+        self._dropped = 0
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped
 
     def publish(self, event: dict[str, Any]) -> None:
         self._sequence += 1
@@ -19,12 +24,38 @@ class EventBroker:
         if event.get("type") not in {"audio_chunk", "audio_end", "audio_clear"}:
             self._history.append(enriched)
         for queue in tuple(self._subscribers):
-            if queue.full():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+            if queue.full() and not self._make_room(queue, enriched):
+                continue
             queue.put_nowait(enriched)
+
+    def _make_room(
+        self,
+        queue: asyncio.Queue[dict[str, Any]],
+        incoming: dict[str, Any],
+    ) -> bool:
+        buffered: list[dict[str, Any]] = []
+        while not queue.empty():
+            buffered.append(queue.get_nowait())
+
+        audio_index = next(
+            (
+                index
+                for index, item in enumerate(buffered)
+                if item.get("type") == "audio_chunk"
+            ),
+            None,
+        )
+        if incoming.get("type") == "audio_chunk" and audio_index is None:
+            for item in buffered:
+                queue.put_nowait(item)
+            self._dropped += 1
+            return False
+
+        del buffered[audio_index if audio_index is not None else 0]
+        for item in buffered:
+            queue.put_nowait(item)
+        self._dropped += 1
+        return True
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self._queue_size)

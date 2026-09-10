@@ -73,3 +73,7 @@ class Qwen3ASRService(ASRService):
         generated = output_ids[:, inputs["input_ids"].shape[1] :]
         decoded = self.processor.decode(generated, return_format="transcription_only")
         return decoded[0] if decoded else ""
+
+    async def close(self) -> None:
+        self.processor = None
+        self.model = None

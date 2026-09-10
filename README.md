@@ -22,9 +22,9 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 - Đã tích hợp `qwen3.5:4b` qua Ollama local API, streaming NDJSON và giữ model trong VRAM.
 - Transformers vẫn là backend dự phòng qua `llm.backend: transformers`.
 - Đã tích hợp VieNeu-TTS v3 Turbo qua SDK `vieneu`, backend ONNX/CPU và `infer_stream` native.
-- Đã có utterance segmentation, conversation history, text chunking, playback queue, latency logs và chế độ half-duplex chống trợ lý nghe lại chính loa.
-- Đã có test cho chunker, history, state, cancellation và config.
-- Đã có web voice client dùng microphone/loa của trình duyệt, đồng thời hiển thị state, transcript, phản hồi streaming, latency và log.
+- Đã có utterance segmentation, conversation history, text chunking, playback queue, latency logs và barge-in bằng câu lệnh ngắt.
+- Đã có test cho chunker, history, state, cancellation, config, runtime dùng chung, session web và binary audio protocol.
+- Đã có web voice client dùng microphone/loa của trình duyệt. Mỗi kết nối có VAD, history và playback độc lập; ASR/LLM/TTS dùng chung model runtime có giới hạn concurrency.
 
 Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB cho thấy Parakeet nhận đúng câu tiếng Việt mẫu dài 2,4 giây trong khoảng 0,39–0,55 giây. Full pipeline cùng TTS và Ollama cũng đã khởi động thành công. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
@@ -34,7 +34,7 @@ Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 G
 - Python 3.12. `uv` tự cài đúng Python theo `.python-version` nếu cần.
 - NVIDIA GPU. Khuyến nghị 16 GB VRAM.
 - Driver NVIDIA tương thích CUDA 12.8.
-- Headset microphone và headphones. Chưa có acoustic echo cancellation.
+- Headset microphone và headphones. Web yêu cầu browser bật echo cancellation/noise suppression nhưng hiệu quả phụ thuộc thiết bị và browser.
 - Kết nối Internet cho lần tải model đầu tiên.
 - Ollama cho backend LLM mặc định. API chỉ dùng `http://127.0.0.1:11434`.
 
@@ -139,13 +139,17 @@ Chạy web dashboard:
 uv run python main.py --web
 ```
 
-Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Mọi client đều có thể bật mic và cùng tham gia một phiên hội thoại; router chọn client đang nói để không trộn các luồng audio im lặng. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
+Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM float32 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Mỗi tab/client là một session hội thoại độc lập; client này không thể ghi âm, xóa history hoặc ngắt playback của client khác. Model chỉ được load một lần và inference được điều phối bằng hàng đợi dùng chung. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
 
-Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON tương ứng được expose tại `GET /api/models`; trạng thái tiến trình nằm tại `GET /health`. Cả hai chỉ bind vào loopback theo `web.host` mặc định.
+Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON được expose tại `GET /api/models`, `GET /api/runtime`, `GET /api/sessions`; trạng thái tiến trình nằm tại `GET /health`. Mặc định server chỉ bind loopback.
 
-Khi agent đang nói, browser vẫn thu để nhận lệnh ngắt. Chỉ câu khớp `audio.interrupt_phrases` như `dừng`, `dừng lại`, `ngừng`, `thôi` mới hủy LLM và playback; câu khác bị bỏ qua. Nút **Ngắt phản hồi** vẫn dừng ngay lập tức.
+Khi agent đang nói, browser vẫn thu để nhận lệnh ngắt. Câu khớp `audio.interrupt_phrases` như `dừng`, `dừng lại`, `ngừng`, `thôi` được nhận không phân biệt dấu, hoa/thường và chấp nhận tiền/hậu tố lịch sự ngắn. Nội dung hội thoại dài không khớp sẽ bị bỏ qua. Nút **Ngắt phản hồi** vẫn dừng ngay lập tức.
 
-Trước khi gọi TTS, ứng dụng bỏ dấu quote, Markdown, ngoặc, emoji và ký hiệu không có ích cho phát âm; `...` được đổi thành dấu chấm. Transcript và câu trả lời hiển thị trên UI vẫn giữ nguyên nội dung model.
+Trước khi gọi TTS, ứng dụng chuẩn hóa quote, Markdown, URL, email, ngày tháng, đơn vị, viết tắt, emoji và ký hiệu không có ích cho phát âm; `...` được đổi thành dấu chấm. Transcript và câu trả lời hiển thị trên UI vẫn giữ nguyên nội dung model.
+
+TTS đi từ server tới browser bằng frame nhị phân `binary-pcm-v1`: header little-endian 24 byte (`VAO1`, `turn_id`, `sample_rate`, `sequence`, `timestamp`) rồi tới PCM float32. JSON chỉ còn dùng cho control/event. Client cũ vẫn có thể đọc JSON audio trong giai đoạn chuyển đổi, nhưng server mới chỉ phát frame nhị phân.
+
+Nếu mở ra LAN, cấu hình bắt buộc `web.access_token` tối thiểu 16 ký tự, TLS certificate/key và `web.allowed_origins`. Truy cập UI bằng `https://host:port/?token=...`; UI tự chuyển token sang WebSocket và link API. Không commit token thật vào repository.
 
 ## Cấu hình chính
 
@@ -157,13 +161,16 @@ Chỉnh `config.yaml`:
 - `asr.backend`: mặc định `parakeet`; đặt `qwen3` cùng model Qwen tương ứng để rollback.
 - `asr.checkpoint_file`: tên checkpoint `.nemo` trong repository Parakeet.
 - `audio.echo_guard_ms`: thời gian chờ sau khi loa dừng trước khi mở thu lại; mặc định `600` ms.
-- `audio.allow_barge_in`: mặc định `true`. Khi agent đang nói, chỉ các câu khớp chính xác `audio.interrupt_phrases` (ví dụ `dừng`, `dừng lại`) mới hủy LLM/TTS; câu khác bị bỏ qua. Nên dùng headphones vì chưa có acoustic echo cancellation.
+- `audio.allow_barge_in`: mặc định `true`. Khi agent đang nói, câu ngắt ngắn khớp `audio.interrupt_phrases` mới hủy LLM/TTS; câu khác bị bỏ qua. Nên dùng headphones nếu browser AEC không hiệu quả.
 - `audio.interrupt_phrases`: danh sách câu lệnh giọng nói dùng để ngắt phản hồi đang phát.
 - `llm.max_tokens`: giới hạn độ dài trả lời và thời gian giữ GPU.
 - `llm.enable_thinking`: giữ `false` để tránh phát nội dung suy luận và giảm độ trễ hội thoại.
 - `llm.backend`: mặc định `ollama`; đặt `transformers` để dùng backend cũ.
 - `llm.context_length`: mặc định 4096, đủ cho hội thoại ngắn và giảm KV cache.
 - `web.host` và `web.port`: mặc định `127.0.0.1:8080` để không mở dịch vụ ra mạng LAN.
+- `web.playback_prebuffer_ms`: buffer phát ban đầu, mặc định 120 ms để giảm hụt tiếng khi TTS có jitter.
+- `web.access_token`, `web.tls_certfile`, `web.tls_keyfile`, `web.allowed_origins`: bắt buộc khi `web.host` không phải loopback.
+- `runtime.max_concurrent_asr/llm/tts`: số inference đồng thời trên model dùng chung; mặc định 1 để tránh vượt VRAM và giữ latency ổn định.
 - `tts.voice`: để `null` dùng preset đầu tiên, hoặc dùng nhãn từ `Vieneu.list_preset_voices()`.
 - `tts_chunker`: cân bằng câu tự nhiên với độ trễ TTS đầu tiên.
 
@@ -187,31 +194,16 @@ Mỗi turn ghi:
 ## Kiến trúc
 
 ```text
-MicrophoneInput
-      |
-SileroVADSegmenter ---- speech start ---- cancel current TurnCancellation
-      |
-speech end
-      |
-VoiceOrchestrator
-      |---- ParakeetCTCService
-      |---- ConversationHistory
-      |---- Qwen35Service -------- token stream
-      |                                  |
-      |                         StreamingTextChunker
-      |                                  |
-      |                            asyncio text queue
-      |                                  |
-      |---- VieNeuTTSService ------ audio chunks
-                                         |
-                                  SpeakerOutput queue
+Browser A -- PCM/WebSocket -- WebVoiceSession A --┐
+Browser B -- PCM/WebSocket -- WebVoiceSession B --┼-- ModelRuntime
+Browser N -- PCM/WebSocket -- WebVoiceSession N --┘   ├─ ASR gate -> Parakeet
+       mỗi session: VAD, history, cancellation,        ├─ LLM gate -> Ollama
+       EventBroker và BrowserAudioOutput riêng         └─ TTS gate -> VieNeu
 
-Browser microphone -- PCM 16 kHz/WebSocket -- VoiceOrchestrator
-VoiceOrchestrator -- TTS PCM/WebSocket -- Browser speaker
-VoiceOrchestrator ---- EventBroker ---- WebSocket ---- web dashboard
+CLI microphone/speaker -- VoiceOrchestrator -- ModelRuntime riêng
 ```
 
-Các interface ASR, LLM và TTS nằm trong `app/*/base.py`. Audio transport chỉ tiếp xúc với orchestrator. Web dùng PCM float32 để giữ đường truyền đơn giản trên loopback; CLI giữ PortAudio cho vận hành trực tiếp trên host.
+Các interface ASR, LLM và TTS nằm trong `app/*/base.py`. Session sở hữu trạng thái hội thoại; runtime sở hữu model và lịch inference. Web input dùng PCM float32 16 kHz, web output dùng binary PCM float32 48 kHz có sequence number; CLI giữ PortAudio cho vận hành trực tiếp trên host.
 
 ## Test
 
@@ -246,19 +238,23 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 ## Giới hạn hiện tại
 
 - VieNeu stream frame audio bên trong mỗi text chunk. Khoảng nghỉ vẫn có thể xuất hiện nếu TTS tạo chậm hơn playback.
-- Chưa có acoustic echo cancellation. Chế độ half-duplex mặc định tránh speaker kích hoạt VAD khi dùng loa ngoài.
-- ASR chạy theo utterance, chưa dùng streaming ASR.
+- Web yêu cầu AEC/noise suppression/auto gain của browser và expose capability thực tế qua `GET /api/sessions`, nhưng chưa có server-side AEC hoặc kiểm chứng cho mọi thiết bị.
+- Parakeet CTC hiện chạy theo utterance. Barge-in vì vậy chỉ có hiệu lực sau khi VAD kết thúc câu ngắt, chưa phải partial streaming ASR.
+- `nvidia/nemotron-3.5-asr-streaming-0.6b` có native cache-aware streaming và hỗ trợ `vi-VN`, nhưng chưa được tích hợp/smoke-test trong project.
+- Mỗi web session có một Silero VAD instance riêng để giữ state độc lập. ASR/LLM/TTS mới là model runtime dùng chung.
+- WebSocket truyền PCM thô, chưa dùng Opus; bandwidth cao hơn phương án dành cho ESP32/WAN.
 - Backend Ollama dùng Q4_K_M. Chất lượng có thể thấp hơn checkpoint BF16 Transformers một ít.
 - Ollama `qwen3.5:4b` và Parakeet CTC 0.6B chạy đồng thời trong giới hạn VRAM 16 GB trên máy smoke test.
-- Web UI hiện là dashboard điều khiển pipeline audio của máy chủ. Chưa dùng microphone/audio playback của trình duyệt.
 - Backend Transformers vẫn dùng torch fallback nếu chọn lại; smoke test cũ đo first text khoảng 1.5 giây.
 - Một lệnh TTS hoặc ASR đang chạy trong worker thread không thể dừng kernel ngay lập tức. Cancellation bỏ kết quả và dọn queue; worker kết thúc phép inference đang chạy.
-- Chưa tích hợp camera, robot movement, MCP, XiaoZhi, ESP32, wake word, RAG, web UI hoặc cloud service.
+- Session mất history khi WebSocket ngắt; chưa có resume/persistence.
+- Chưa tích hợp camera, robot movement, MCP, XiaoZhi/ESP32, wake word, RAG hoặc cloud service.
 
 ## Nguồn API chính thức
 
 - NVIDIA Parakeet Vietnamese model card: <https://huggingface.co/nvidia/parakeet-ctc-0.6b-Vietnamese>
 - NVIDIA NeMo ASR: <https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/intro.html>
+- NVIDIA Nemotron streaming ASR: <https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b>
 - Qwen3.5-4B model card: <https://huggingface.co/Qwen/Qwen3.5-4B>
 - Qwen3.5:4b trên Ollama: <https://ollama.com/library/qwen3.5:4b>
 - Ollama local API: <https://docs.ollama.com/api/introduction>
@@ -267,6 +263,6 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 
 ## Bước tối ưu tiếp theo
 
-Đo Ollama first-token latency trên máy thật trước. Sau đó tinh chỉnh `min_silence_ms`, `context_length` và kích thước text chunk theo log dashboard.
+Đo p50/p95 của ASR queue, Ollama first-token và audio underrun với nhiều browser thật. Sau đó tinh chỉnh concurrency, `min_silence_ms`, `context_length`, playback prebuffer và kích thước text chunk.
 
-Chỉ bắt đầu XiaoZhi/ESP32 sau khi pipeline headset chạy ổn định và barge-in đã được kiểm tra bằng hội thoại dài.
+Ưu tiên tích hợp native streaming ASR rồi kiểm tra barge-in bằng hội thoại dài/loa ngoài. Chỉ bắt đầu XiaoZhi/ESP32 sau khi protocol Opus, auth và session lifecycle được chốt.

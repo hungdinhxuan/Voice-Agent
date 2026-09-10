@@ -71,9 +71,25 @@ async def test_non_stop_phrase_does_not_cancel_active_turn() -> None:
     await orchestrator.llm.close()
 
 
-@pytest.mark.parametrize("text", ["dừng", "DỪNG LẠI!", " ngừng lại. ", "Thôi!"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "dừng",
+        "DỪNG LẠI!",
+        " ngừng lại. ",
+        "Thôi!",
+        "dung lai di",
+        "làm ơn dừng lại nhé",
+        "vui lòng ngừng giúp tôi",
+    ],
+)
 def test_interrupt_phrase_matching_ignores_case_spacing_and_punctuation(text: str) -> None:
     assert _matches_interrupt_phrase(text, AppConfig().audio.interrupt_phrases)
+
+
+@pytest.mark.parametrize("text", ["đừng dừng công việc", "cách dừng máy", "thôi nào bạn"])
+def test_interrupt_phrase_matching_rejects_conversation_text(text: str) -> None:
+    assert not _matches_interrupt_phrase(text, AppConfig().audio.interrupt_phrases)
 
 
 @pytest.mark.asyncio

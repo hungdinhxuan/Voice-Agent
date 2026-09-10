@@ -57,6 +57,9 @@ class VieNeuTTSService(TTSService):
             if samples.size:
                 yield samples
 
+    async def close(self) -> None:
+        self.engine = None
+
 
 def _next_audio_chunk(stream: Any, lock: threading.Lock) -> object:
     with lock:

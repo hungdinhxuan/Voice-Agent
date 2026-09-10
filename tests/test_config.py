@@ -13,6 +13,7 @@ def test_loads_repository_config() -> None:
     assert config.asr.model == "nvidia/parakeet-ctc-0.6b-Vietnamese"
     assert config.audio.allow_barge_in
     assert "dừng lại" in config.audio.interrupt_phrases
+    assert config.runtime.max_concurrent_asr == 1
 
 
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
@@ -27,3 +28,27 @@ def test_rejects_empty_interrupt_phrases(tmp_path: Path) -> None:
     path.write_text("audio:\n  interrupt_phrases: []\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="interrupt_phrases"):
         AppConfig.load(path)
+
+
+def test_lan_web_requires_token_tls_and_origin(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("web:\n  host: 0.0.0.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="access_token"):
+        AppConfig.load(path)
+
+
+def test_lan_web_accepts_complete_security_config(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "web:\n"
+        "  host: 0.0.0.0\n"
+        "  access_token: 0123456789abcdef\n"
+        "  tls_certfile: cert.pem\n"
+        "  tls_keyfile: key.pem\n"
+        "  allowed_origins: [https://voice.local]\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.load(path)
+
+    assert config.web.host == "0.0.0.0"

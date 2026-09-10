@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 
-from app.asr.factory import create_asr_service
 from app.audio.input import MicrophoneInput
 from app.audio.output import AudioOutput, SpeakerOutput
 from app.cancellation import TurnCancellation
@@ -18,9 +17,8 @@ from app.config import AppConfig
 from app.conversation.chunker import StreamingTextChunker
 from app.conversation.history import ConversationHistory
 from app.conversation.speech import prepare_for_speech
-from app.llm.factory import create_llm_service
+from app.runtime import ModelRuntime
 from app.state import ConversationState, StateMachine
-from app.tts.vieneu import VieNeuTTSService
 from app.utils.timing import TurnTiming
 from app.vad.silero import SileroVADSegmenter, VADEventType
 
@@ -36,6 +34,7 @@ class VoiceOrchestrator:
         *,
         speaker: AudioOutput | None = None,
         use_local_microphone: bool = True,
+        runtime: ModelRuntime | None = None,
     ) -> None:
         self.config = config
         self._event_handler = event_handler
@@ -45,9 +44,11 @@ class VoiceOrchestrator:
             config.conversation.max_history_turns,
         )
         self.vad: SileroVADSegmenter | None = None
-        self.asr = create_asr_service(config.asr)
-        self.llm = create_llm_service(config.llm)
-        self.tts = VieNeuTTSService(config.tts)
+        self.runtime = runtime or ModelRuntime(config)
+        self._owns_runtime = runtime is None
+        self.asr = self.runtime.asr
+        self.llm = self.runtime.llm
+        self.tts = self.runtime.tts
         self.speaker = speaker or SpeakerOutput(config.audio)
         self._audio_frames: asyncio.Queue[np.ndarray] | None = (
             None if use_local_microphone else asyncio.Queue(maxsize=64)
@@ -68,12 +69,11 @@ class VoiceOrchestrator:
                 self.config.audio.sample_rate,
                 self.config.audio.block_size,
             )
-            self._log(f"[APP] Đang load ASR {self.config.asr.backend}/{self.config.asr.model}...")
-            await self.asr.load()
-            self._log(f"[APP] Đang load LLM backend {self.config.llm.backend}...")
-            await self.llm.load()
-            self._log("[APP] Đang load VieNeu-TTS...")
-            await self.tts.load()
+            if self._owns_runtime:
+                self._log("[APP] Đang load model runtime...")
+                await self.runtime.load()
+            elif not self.runtime.loaded:
+                raise RuntimeError("Model runtime dùng chung chưa được load.")
             await self.speaker.start()
             speaker_started = True
             self._log("[APP] Sẵn sàng. Hãy nói tiếng Việt. Nhấn Ctrl+C để dừng.")
@@ -89,7 +89,8 @@ class VoiceOrchestrator:
             await self._cancel_turn()
             if speaker_started:
                 await self.speaker.close()
-            await self.llm.close()
+            if self._owns_runtime:
+                await self.runtime.close()
 
     async def _listen_forever(self) -> None:
         if self._audio_frames is not None:
@@ -199,7 +200,11 @@ class VoiceOrchestrator:
     async def _handle_interrupt_candidate(self, audio: np.ndarray) -> None:
         cancellation = TurnCancellation()
         try:
-            text = await self.asr.transcribe(audio, self.config.audio.sample_rate, cancellation)
+            text = await self.runtime.transcribe(
+                audio,
+                self.config.audio.sample_rate,
+                cancellation,
+            )
         except Exception as exc:
             self._log(
                 f"[ASR] interrupt detection error: {type(exc).__name__}: {exc}",
@@ -222,7 +227,11 @@ class VoiceOrchestrator:
         timing = TurnTiming()
         try:
             timing.asr_started = time.perf_counter()
-            text = await self.asr.transcribe(audio, self.config.audio.sample_rate, cancellation)
+            text = await self.runtime.transcribe(
+                audio,
+                self.config.audio.sample_rate,
+                cancellation,
+            )
             timing.asr_finished = time.perf_counter()
             self._log(f"[ASR] {text}")
             self._emit("transcript", text=text)
@@ -312,7 +321,7 @@ class VoiceOrchestrator:
     ) -> None:
         chunker = StreamingTextChunker(self.config.tts_chunker)
         try:
-            async for token in self.llm.generate_stream(messages, cancellation):
+            async for token in self.runtime.generate_stream(messages, cancellation):
                 if timing.first_token is None and token:
                     timing.first_token = time.perf_counter()
                 full_response.append(token)
@@ -341,7 +350,7 @@ class VoiceOrchestrator:
                 continue
             if timing.tts_started is None:
                 timing.tts_started = time.perf_counter()
-            async for audio in self.tts.synthesize_stream(text, cancellation):
+            async for audio in self.runtime.synthesize_stream(text, cancellation):
                 if timing.first_audio is None:
                     timing.first_audio = time.perf_counter()
                     self._transition(ConversationState.SPEAKING)
@@ -406,9 +415,25 @@ def _usable_transcript(text: str) -> bool:
 
 def _matches_interrupt_phrase(text: str, phrases: list[str]) -> bool:
     normalized_text = _normalize_phrase(text)
-    return normalized_text in {_normalize_phrase(phrase) for phrase in phrases}
+    prefixes = ("", "hay ", "lam on ", "vui long ")
+    suffixes = {"", "di", "nhe", "voi", "ngay", "duoc roi", "giup toi"}
+    for prefix in prefixes:
+        if prefix and not normalized_text.startswith(prefix):
+            continue
+        candidate = normalized_text[len(prefix) :]
+        for phrase in phrases:
+            normalized_phrase = _normalize_phrase(phrase)
+            if candidate == normalized_phrase:
+                return True
+            if candidate.startswith(f"{normalized_phrase} "):
+                if candidate[len(normalized_phrase) + 1 :] in suffixes:
+                    return True
+    return False
 
 
 def _normalize_phrase(text: str) -> str:
-    normalized = unicodedata.normalize("NFC", text).casefold()
-    return " ".join(re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE).split())
+    normalized = unicodedata.normalize("NFD", text).casefold().replace("đ", "d")
+    without_marks = "".join(
+        character for character in normalized if unicodedata.category(character) != "Mn"
+    )
+    return " ".join(re.sub(r"[^\w\s]", " ", without_marks, flags=re.UNICODE).split())

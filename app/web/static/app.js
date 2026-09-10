@@ -7,6 +7,7 @@ const conversation = document.querySelector('#conversation');
 const logs = document.querySelector('#logs');
 const micButton = document.querySelector('#microphone');
 const micStatus = document.querySelector('#microphone-status');
+const accessToken = new URLSearchParams(location.search).get('token');
 let socket;
 let assistantBubble = null;
 let browserAudioEnabled = false;
@@ -17,6 +18,8 @@ let playbackContext = null;
 let playbackTurn = null;
 let playbackCursor = 0;
 let playbackEndTimer = null;
+let playbackSequence = -1;
+let playbackPrebufferSeconds = 0.12;
 const playbackSources = new Set();
 const playbackStarted = new Set();
 
@@ -30,7 +33,9 @@ const stateLabels = {
 
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  socket = new WebSocket(`${protocol}//${location.host}/ws`);
+  const tokenQuery = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
+  socket = new WebSocket(`${protocol}//${location.host}/ws${tokenQuery}`);
+  socket.binaryType = 'arraybuffer';
   socket.onopen = () => setConnection(true);
   socket.onclose = () => {
     setConnection(false);
@@ -38,7 +43,10 @@ function connect() {
     clearBrowserAudio();
     setTimeout(connect, 1500);
   };
-  socket.onmessage = ({ data }) => handleEvent(JSON.parse(data));
+  socket.onmessage = ({ data }) => {
+    if (typeof data === 'string') handleEvent(JSON.parse(data));
+    else playBinaryAudio(data);
+  };
 }
 
 function setConnection(online) {
@@ -52,7 +60,10 @@ function handleEvent(event) {
     document.querySelector('#model').textContent = event.model;
     if (event.models) renderModels(event.models);
     if (event.state) setState(event.state);
-    if (event.type === 'hello') configureBrowserAudio(event.audio_mode === 'browser');
+    if (event.type === 'hello') {
+      configureBrowserAudio(event.audio_mode === 'browser');
+      playbackPrebufferSeconds = Math.max(0, Number(event.playback_prebuffer_ms || 0)) / 1000;
+    }
   } else if (event.type === 'state') {
     setState(event.state);
   } else if (event.type === 'transcript') {
@@ -120,6 +131,15 @@ async function startMicrophone() {
     silent.connect(captureContext.destination);
     await captureContext.resume();
     await ensurePlaybackContext();
+    const settings = microphoneStream.getAudioTracks()[0]?.getSettings?.() || {};
+    sendAction('audio_capabilities', {
+      capabilities: {
+        echoCancellation: settings.echoCancellation ?? null,
+        noiseSuppression: settings.noiseSuppression ?? null,
+        autoGainControl: settings.autoGainControl ?? null,
+        sampleRate: settings.sampleRate ?? captureContext.sampleRate,
+      },
+    });
     micButton.textContent = 'Tắt microphone';
     micButton.classList.add('active');
     micStatus.textContent = 'Đang dùng microphone và loa của trình duyệt.';
@@ -158,12 +178,20 @@ function playAudioChunk(event) {
   if (playbackTurn !== event.turn_id) {
     clearBrowserAudio();
     playbackTurn = event.turn_id;
-    playbackCursor = playbackContext.currentTime + 0.04;
+    playbackCursor = playbackContext.currentTime + playbackPrebufferSeconds;
+    playbackSequence = -1;
   }
-  const binary = atob(event.pcm);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const samples = new Float32Array(bytes.buffer);
+  if (event.sequence !== undefined && playbackSequence >= 0 && event.sequence !== playbackSequence + 1) {
+    sendAction('audio_gap', { missing: Math.max(1, event.sequence - playbackSequence - 1) });
+  }
+  if (event.sequence !== undefined) playbackSequence = event.sequence;
+  let samples = event.samples;
+  if (!samples) {
+    const binary = atob(event.pcm);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    samples = new Float32Array(bytes.buffer);
+  }
   const buffer = playbackContext.createBuffer(1, samples.length, event.sample_rate);
   buffer.copyToChannel(samples, 0);
   const source = playbackContext.createBufferSource();
@@ -178,6 +206,20 @@ function playAudioChunk(event) {
     playbackStarted.add(event.turn_id);
     sendAction('audio_started', { turn_id: event.turn_id });
   }
+}
+
+function playBinaryAudio(packet) {
+  const headerBytes = 24;
+  if (!(packet instanceof ArrayBuffer) || packet.byteLength <= headerBytes) return;
+  const view = new DataView(packet);
+  const magic = String.fromCharCode(...new Uint8Array(packet, 0, 4));
+  if (magic !== 'VAO1') return;
+  playAudioChunk({
+    turn_id: view.getUint32(4, true),
+    sample_rate: view.getUint32(8, true),
+    sequence: view.getUint32(12, true),
+    samples: new Float32Array(packet, headerBytes),
+  });
 }
 
 function finishAudioTurn(turnId) {
@@ -202,6 +244,7 @@ function clearBrowserAudio() {
   playbackSources.clear();
   playbackTurn = null;
   playbackCursor = playbackContext?.currentTime || 0;
+  playbackSequence = -1;
 }
 
 function sendAction(action, data = {}) {
@@ -282,5 +325,9 @@ document.querySelector('#interrupt').addEventListener('click', () => {
 document.querySelector('#clear').addEventListener('click', () => {
   sendAction('clear_history');
 });
+
+if (accessToken) {
+  document.querySelector('#models-api').href = `/api/models?token=${encodeURIComponent(accessToken)}`;
+}
 
 connect();

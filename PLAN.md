@@ -1,10 +1,25 @@
+# Implementation plan and status
+
+Updated 2026-09-10. The original single-user local pipeline below is operational. The web hardening roadmap is now:
+
+- [x] M0 — audit README limitations and define ownership: a session owns VAD/history/cancellation/playback; `ModelRuntime` owns shared model lifecycle and inference gates.
+- [x] M1 — isolate every WebSocket client into an independent voice session while loading ASR/LLM/TTS only once.
+- [x] M2 — move server-to-browser TTS from base64 JSON to versioned binary PCM, add sequence-gap telemetry and configurable playback prebuffer.
+- [x] M3 — make stop phrases accent/case tolerant, reject long conversational false positives, request browser AEC/noise suppression and expose actual track capabilities.
+- [x] M4 — normalize Markdown, URLs, email, dates, units, currency and common technical abbreviations before TTS without changing UI text.
+- [x] M5 — expose `/api/runtime` and `/api/sessions`, track queue pressure/audio gaps, and require TLS + token + origin allowlist when binding outside loopback.
+- [ ] M6 — integrate and smoke-test a native streaming Vietnamese ASR backend. Candidate: `nvidia/nemotron-3.5-asr-streaming-0.6b`; keep Parakeet CTC as rollback.
+- [ ] M7 — add session resume/persistence, Opus transport and hardware-tested XiaoZhi/ESP32 support after M6 latency and long-conversation gates pass.
+
+Acceptance gates for completed web work: two clients can speak independently; one client cannot mutate another's history/playback; model adapters load once; binary audio has a version and sequence; LAN mode fails closed without TLS/token/origins; model-free test suite passes.
+
 Build a fully local, open-source, real-time Vietnamese voice conversation application that runs on a single PC.
 
 The final goal is:
 
 Microphone  
 → Silero VAD  
-→ Qwen3-ASR-0.6B  
+→ NVIDIA Parakeet CTC 0.6B Vietnamese  
 → Qwen3.5-4B  
 → VieNeu-TTS v3 Turbo  
 → Speaker
@@ -44,11 +59,11 @@ Use:
 - Python 3.11 or 3.12
 - `uv` for dependency/environment management
 - Silero VAD for voice activity detection
-- Qwen3-ASR-0.6B for Vietnamese speech recognition
+- NVIDIA Parakeet CTC 0.6B Vietnamese for speech recognition
 - Qwen3.5-4B for the conversational LLM
 - VieNeu-TTS v3 Turbo for Vietnamese TTS
 - ONNX CPU backend for VieNeu-TTS if practical
-- GPU for Qwen ASR and Qwen LLM
+- GPU for Parakeet ASR and Qwen LLM
 - `sounddevice`, PortAudio, or another reliable local audio backend
 - asyncio wherever appropriate
 
@@ -69,7 +84,7 @@ The architecture should allow:
 
 ```text
 GPU:
-- Qwen3-ASR-0.6B
+- NVIDIA Parakeet CTC 0.6B Vietnamese
 - Qwen3.5-4B
 
 CPU:
@@ -97,7 +112,7 @@ Silero VAD
     ↓
 utterance segmentation
     ↓
-Qwen3-ASR-0.6B
+NVIDIA Parakeet CTC 0.6B Vietnamese
     ↓
 conversation history
     ↓
@@ -133,7 +148,7 @@ These should be easy to add later, but are outside the first working milestone.
 
 Capture microphone audio continuously.
 
-Use a format compatible with Silero VAD and Qwen3-ASR, preferably:
+Use a format compatible with Silero VAD and Parakeet CTC, preferably:
 
 ```text
 16 kHz
@@ -186,7 +201,7 @@ Log:
 Use:
 
 ```text
-Qwen/Qwen3-ASR-0.6B
+nvidia/parakeet-ctc-0.6b-Vietnamese
 
 ```
 
@@ -571,7 +586,7 @@ vad:
   min_silence_ms: 400
 
 asr:
-  model: Qwen/Qwen3-ASR-0.6B
+  model: nvidia/parakeet-ctc-0.6b-Vietnamese
   device: cuda
 
 llm:
@@ -675,7 +690,7 @@ Xin chào, bạn tên là gì?
 9. The assistant starts speaking without waiting unnecessarily for the full generated response.
 10. I can interrupt it by speaking again.
 
-Do not move to ESP32 integration until these requirements work reliably.
+Do not move to ESP32 integration until these requirements work reliably. The browser transport is now the reference session protocol; ESP32 still needs Opus framing and hardware validation.
 
 ---
 
@@ -688,6 +703,9 @@ Add lightweight tests for:
 - state transitions
 - cancellation
 - config loading
+- independent web sessions
+- shared runtime lifecycle and concurrency gates
+- binary audio framing and security helpers
 
 Do not attempt to unit-test actual GPU model inference.
 
@@ -736,7 +754,7 @@ Clearly mark unfinished functionality as TODO.
 
 # Future architecture
 
-Do not implement this yet, but preserve clean interfaces so later we can replace:
+The browser transport is implemented with WebSocket + PCM. Preserve clean interfaces so later we can add:
 
 ```text
 PC microphone
@@ -765,7 +783,7 @@ Opus/WebSocket
   ↓
 VAD
   ↓
-Qwen3-ASR
+native streaming Vietnamese ASR
   ↓
 Qwen3.5
   ↓
@@ -798,7 +816,7 @@ Work iteratively.
 
 First inspect the official repositories/model documentation for the currently supported APIs of:
 
-- Qwen3-ASR
+- NVIDIA Parakeet and Nemotron streaming ASR
 - Qwen3.5
 - VieNeu-TTS v3 Turbo
 - Silero VAD
@@ -840,4 +858,3 @@ At the end, provide:
 - known limitations
 - what remains to test on the actual GPU/audio hardware
 - recommended next optimization after the first working prototype
-

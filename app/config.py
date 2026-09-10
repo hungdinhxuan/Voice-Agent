@@ -68,6 +68,11 @@ class LLMConfig:
 class WebConfig:
     host: str = "127.0.0.1"
     port: int = 8080
+    access_token: str | None = None
+    tls_certfile: str | None = None
+    tls_keyfile: str | None = None
+    allowed_origins: list[str] = field(default_factory=list)
+    playback_prebuffer_ms: int = 120
 
 
 @dataclass(slots=True)
@@ -93,6 +98,13 @@ class ConversationConfig:
 
 
 @dataclass(slots=True)
+class RuntimeConfig:
+    max_concurrent_asr: int = 1
+    max_concurrent_llm: int = 1
+    max_concurrent_tts: int = 1
+
+
+@dataclass(slots=True)
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VADConfig = field(default_factory=VADConfig)
@@ -102,6 +114,7 @@ class AppConfig:
     web: WebConfig = field(default_factory=WebConfig)
     tts_chunker: ChunkerConfig = field(default_factory=ChunkerConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -145,6 +158,12 @@ class AppConfig:
             raise ConfigError("Cần min_chars <= preferred_chars <= max_chars và min_chars > 0.")
         if self.conversation.max_history_turns < 1:
             raise ConfigError("conversation.max_history_turns phải lớn hơn 0.")
+        if min(
+            self.runtime.max_concurrent_asr,
+            self.runtime.max_concurrent_llm,
+            self.runtime.max_concurrent_tts,
+        ) < 1:
+            raise ConfigError("Các giới hạn runtime concurrency phải lớn hơn 0.")
         if self.llm.backend not in {"ollama", "transformers"}:
             raise ConfigError("llm.backend chỉ hỗ trợ ollama hoặc transformers.")
         if self.llm.context_length < 512:
@@ -157,8 +176,19 @@ class AppConfig:
             raise ConfigError("llm.host phải trỏ đến Ollama trên máy cục bộ.")
         if not 1 <= self.web.port <= 65535:
             raise ConfigError("web.port phải nằm trong khoảng 1..65535.")
-        if self.web.host not in {"127.0.0.1", "localhost", "::1"}:
-            raise ConfigError("web.host phải là địa chỉ loopback cục bộ.")
+        is_loopback = self.web.host in {"127.0.0.1", "localhost", "::1"}
+        tls_configured = bool(self.web.tls_certfile and self.web.tls_keyfile)
+        if bool(self.web.tls_certfile) != bool(self.web.tls_keyfile):
+            raise ConfigError("web.tls_certfile và web.tls_keyfile phải được cấu hình cùng nhau.")
+        if not is_loopback:
+            if not self.web.access_token or len(self.web.access_token) < 16:
+                raise ConfigError("Web trên LAN cần web.access_token dài ít nhất 16 ký tự.")
+            if not tls_configured:
+                raise ConfigError("Web trên LAN cần TLS certificate và key.")
+            if not self.web.allowed_origins:
+                raise ConfigError("Web trên LAN cần web.allowed_origins.")
+        if not 0 <= self.web.playback_prebuffer_ms <= 1000:
+            raise ConfigError("web.playback_prebuffer_ms phải nằm trong 0..1000.")
         if self.tts.backend != "onnx" or self.tts.device != "cpu":
             raise ConfigError("Milestone 1 chỉ hỗ trợ VieNeu backend=onnx, device=cpu.")
         if self.audio.output_sample_rate != self.tts.sample_rate:

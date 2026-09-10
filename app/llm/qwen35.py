@@ -114,6 +114,10 @@ class Qwen35Service(LLMService):
                 cancellation.thread_event.set()
             await asyncio.to_thread(thread.join, 2.0)
 
+    async def close(self) -> None:
+        self.processor = None
+        self.model = None
+
 
 def _next_streamer_item(streamer: Any) -> object:
     try:

@@ -8,6 +8,9 @@ from app.cancellation import TurnCancellation
 
 
 class ASRService(ABC):
+    async def load(self) -> None:
+        return None
+
     @abstractmethod
     async def transcribe(
         self,
@@ -17,3 +20,5 @@ class ASRService(ABC):
     ) -> str:
         raise NotImplementedError
 
+    async def close(self) -> None:
+        return None

@@ -1,26 +1,10 @@
 import asyncio
-import base64
 
 import numpy as np
 import pytest
 
 from app.config import AudioConfig
-from app.web.audio import BrowserAudioInputRouter, BrowserAudioOutput
-
-
-def test_browser_input_router_avoids_mixing_client_streams() -> None:
-    received: list[np.ndarray] = []
-    router = BrowserAudioInputRouter(received.append)
-    client_one = object()
-    client_two = object()
-    speech = np.full(512, 0.1, dtype=np.float32)
-
-    assert router.feed(client_one, speech)
-    assert not router.feed(client_two, speech)
-    router.release()
-    assert router.feed(client_two, speech)
-
-    assert len(received) == 2
+from app.web.audio import BrowserAudioOutput
 
 
 @pytest.mark.asyncio
@@ -35,7 +19,7 @@ async def test_browser_output_streams_pcm_and_waits_for_client_ack() -> None:
     chunk = events[-1]
     assert chunk["type"] == "audio_chunk"
     assert chunk["turn_id"] == 7
-    decoded = np.frombuffer(base64.b64decode(str(chunk["pcm"])), dtype="<f4")
+    decoded = np.frombuffer(chunk["pcm"], dtype="<f4")
     np.testing.assert_array_equal(decoded, samples)
 
     first_played = asyncio.create_task(output.wait_first_played(7))

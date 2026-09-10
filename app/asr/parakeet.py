@@ -67,3 +67,6 @@ class ParakeetCTCService(ASRService):
             return ""
         result = outputs[0]
         return str(result.text if hasattr(result, "text") else result)
+
+    async def close(self) -> None:
+        self.model = None

@@ -48,6 +48,11 @@ llm:
 web:
   host: 127.0.0.1
   port: 8080
+  access_token: null
+  tls_certfile: null
+  tls_keyfile: null
+  allowed_origins: []
+  playback_prebuffer_ms: 120
 
 tts:
   backend: onnx
@@ -69,3 +74,8 @@ conversation:
     Không sử dụng Markdown trừ khi thật sự cần thiết.
     Không trả lời quá dài nếu người dùng không yêu cầu.
     Ưu tiên câu văn dễ chuyển thành tiếng nói.
+
+runtime:
+  max_concurrent_asr: 1
+  max_concurrent_llm: 1
+  max_concurrent_tts: 1
