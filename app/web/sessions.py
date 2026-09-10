@@ -21,22 +21,30 @@ class WebVoiceSession:
 
     def __init__(self, config: AppConfig, runtime: ModelRuntime) -> None:
         self.id = uuid.uuid4().hex
-        self.config = config
+        self.base_config = config
         self.runtime = runtime
+        self.language = runtime.default_language
+        self.config = config.for_language(self.language)
         self.broker = EventBroker()
         self.metrics: dict[str, dict[str, Any]] = {}
         self.audio_capabilities: dict[str, Any] = {}
         self.connected_at = time.time()
         self.last_active_at = self.connected_at
-        self.speaker = BrowserAudioOutput(config.audio, self._publish)
+        self.switching_language = False
+        self._language_lock = asyncio.Lock()
+        self.task: asyncio.Task[None] | None = None
+        self._create_orchestrator()
+
+    def _create_orchestrator(self) -> None:
+        self.speaker = BrowserAudioOutput(self.config.audio, self._publish)
         self.orchestrator = VoiceOrchestrator(
-            config,
+            self.config,
             event_handler=self._publish,
             speaker=self.speaker,
             use_local_microphone=False,
-            runtime=runtime,
+            runtime=self.runtime,
+            language=self.language,
         )
-        self.task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         if self.task is not None:
@@ -49,7 +57,8 @@ class WebVoiceSession:
 
     def push_audio(self, frame: np.ndarray) -> None:
         self.last_active_at = time.time()
-        self.orchestrator.feed_audio(frame)
+        if not self.switching_language:
+            self.orchestrator.feed_audio(frame)
 
     async def handle_action(self, message: dict[str, Any]) -> None:
         self.last_active_at = time.time()
@@ -73,8 +82,70 @@ class WebVoiceSession:
                     "unit": "chunks",
                 }
             )
+        elif action == "set_language":
+            await self.switch_language(str(message.get("language", "")))
+
+    def report_protocol_error(self, message: str) -> None:
+        """Một frame hỏng chỉ được bỏ qua, không được đóng session."""
+
+        self._publish({"type": "protocol_error", "message": message})
+
+    async def switch_language(self, language: str) -> None:
+        code = language.casefold()
+        if code == self.language:
+            self._publish(
+                {
+                    "type": "language_changed",
+                    "language": code,
+                    "models": build_model_catalog(self.config),
+                }
+            )
+            return
+        async with self._language_lock:
+            if code not in {"vi", "en"}:
+                self._publish(
+                    {
+                        "type": "language_error",
+                        "language": code,
+                        "message": f"Ngôn ngữ không được hỗ trợ: {language}",
+                    }
+                )
+                return
+            self.switching_language = True
+            await self.orchestrator.disconnect_audio_client()
+            self._publish({"type": "language_loading", "language": code})
+            try:
+                await self.runtime.load_language(code)
+            except Exception as exc:
+                self._publish(
+                    {
+                        "type": "language_error",
+                        "language": code,
+                        "message": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                self.switching_language = False
+                return
+
+            await self._stop_orchestrator()
+            self.language = code
+            self.config = self.base_config.for_language(code)
+            self._create_orchestrator()
+            self._publish(
+                {
+                    "type": "language_changed",
+                    "language": code,
+                    "models": build_model_catalog(self.config),
+                }
+            )
+            self._publish({"type": "history_cleared"})
+            self.switching_language = False
+            self.start()
 
     async def close(self) -> None:
+        await self._stop_orchestrator()
+
+    async def _stop_orchestrator(self) -> None:
         await self.orchestrator.disconnect_audio_client()
         if self.task is not None:
             self.task.cancel()
@@ -87,6 +158,8 @@ class WebVoiceSession:
         return {
             "id": self.id,
             "state": state,
+            "language": self.language,
+            "switching_language": self.switching_language,
             "connected_at": self.connected_at,
             "last_active_at": self.last_active_at,
             "dropped_events": self.broker.dropped,
@@ -98,7 +171,11 @@ class WebVoiceSession:
         self.last_active_at = time.time()
         event = {"session_id": self.id, **event}
         if event.get("type") == "ready":
-            event = {**event, "models": build_model_catalog(self.config)}
+            event = {
+                **event,
+                "language": self.language,
+                "models": build_model_catalog(self.config),
+            }
         if event.get("type") == "metric" and "name" in event:
             self.metrics[str(event["name"])] = {
                 "value": event.get("value"),

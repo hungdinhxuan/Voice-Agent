@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import secrets
 import struct
 from contextlib import asynccontextmanager
@@ -14,14 +16,15 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import AppConfig
+from app.config import AppConfig, WebConfig
 from app.runtime import ModelRuntime
-from app.web.model_catalog import build_model_catalog
+from app.web.model_catalog import build_language_catalogs, build_model_catalog
 from app.web.sessions import VoiceSessionRegistry, WebVoiceSession
 
 
 STATIC_DIR = Path(__file__).with_name("static")
 _AUDIO_HEADER = struct.Struct("<4sIIId")
+_TOKEN_QUERY = re.compile(r"(token=)[^&\s\"']+")
 
 
 def create_web_app(config: AppConfig) -> FastAPI:
@@ -38,7 +41,7 @@ def create_web_app(config: AppConfig) -> FastAPI:
             await registry.close_all()
             await runtime.close()
 
-    app = FastAPI(title="Local Vietnamese Voice Agent", lifespan=lifespan)
+    app = FastAPI(title="Local Bilingual Voice Agent", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.middleware("http")
@@ -61,19 +64,26 @@ def create_web_app(config: AppConfig) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, Any]:
         sessions = app.state.sessions.snapshots()
+        default_config = config.for_language(config.web.default_language)
         return {
             "ok": app.state.runtime.loaded,
             "state": sessions[0]["state"] if len(sessions) == 1 else "IDLE",
             "session_count": len(sessions),
             "backend": config.llm.backend,
             "model": config.llm.model,
-            "asr_backend": config.asr.backend,
-            "asr_model": config.asr.model,
+            "asr_backend": default_config.asr.backend,
+            "asr_model": default_config.asr.model,
+            "default_language": config.web.default_language,
+            "supported_languages": ["vi", "en"],
         }
 
     @app.get("/api/models")
     async def models() -> dict[str, Any]:
-        return {"models": build_model_catalog(config)}
+        return {
+            "default_language": config.web.default_language,
+            "models": build_model_catalog(config.for_language(config.web.default_language)),
+            "languages": build_language_catalogs(config),
+        }
 
     @app.get("/api/sessions")
     async def sessions() -> dict[str, Any]:
@@ -92,6 +102,9 @@ def create_web_app(config: AppConfig) -> FastAPI:
         ):
             await websocket.close(code=1008)
             return
+        if app.state.sessions.count >= config.web.max_sessions:
+            await websocket.close(code=1013)
+            return
         await websocket.accept()
         session = app.state.sessions.open()
         queue = session.subscribe()
@@ -100,11 +113,13 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 "type": "hello",
                 "backend": config.llm.backend,
                 "model": config.llm.model,
-                "asr_backend": config.asr.backend,
-                "asr_model": config.asr.model,
-                "models": build_model_catalog(config),
+                "asr_backend": session.config.asr.backend,
+                "asr_model": session.config.asr.model,
+                "models": build_model_catalog(session.config),
                 "state": session.orchestrator.state.state.value,
                 "session_id": session.id,
+                "language": session.language,
+                "supported_languages": ["vi", "en"],
                 "audio_mode": "browser",
                 "audio_transport": "binary-pcm-v1",
                 "playback_prebuffer_ms": config.web.playback_prebuffer_ms,
@@ -156,15 +171,19 @@ async def _receive_actions(
             packet = await websocket.receive()
             if packet["type"] == "websocket.disconnect":
                 return
-            payload = packet.get("bytes")
-            if payload is not None:
-                session.push_audio(decode_browser_audio(payload, frame_samples))
-                continue
-            raw_message = packet.get("text")
-            if raw_message is None:
-                continue
-            message = json.loads(raw_message)
-            await session.handle_action(message)
+            try:
+                payload = packet.get("bytes")
+                if payload is not None:
+                    session.push_audio(decode_browser_audio(payload, frame_samples))
+                    continue
+                raw_message = packet.get("text")
+                if raw_message is None:
+                    continue
+                await session.handle_action(json.loads(raw_message))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                session.report_protocol_error(f"{type(exc).__name__}: {exc}")
     except WebSocketDisconnect:
         return
 
@@ -194,6 +213,7 @@ def encode_browser_audio(event: dict[str, Any]) -> bytes:
 
 
 async def serve_web(config: AppConfig) -> None:
+    logging.getLogger("uvicorn.access").addFilter(RedactTokenFilter())
     app = create_web_app(config)
     server = uvicorn.Server(
         uvicorn.Config(
@@ -219,5 +239,33 @@ def _authorized(expected: str | None, authorization: str | None, query_token: st
 
 
 def _origin_allowed(origin: str | None, config: AppConfig) -> bool:
-    allowed = config.web.allowed_origins
-    return origin is None or not allowed or origin in allowed
+    if origin is None:
+        return True
+    if config.web.allowed_origins:
+        return origin in config.web.allowed_origins
+    if not config.web.require_same_origin:
+        return True
+    return origin in _loopback_origins(config.web)
+
+
+def _loopback_origins(web: WebConfig) -> set[str]:
+    """WebSocket bỏ qua CORS, nên trang web lạ không được phép mở session cục bộ."""
+
+    scheme = "https" if web.tls_certfile else "http"
+    hosts = ("127.0.0.1", "localhost", "[::1]")
+    origins = {f"{scheme}://{host}:{web.port}" for host in hosts}
+    if web.port == (443 if scheme == "https" else 80):
+        origins |= {f"{scheme}://{host}" for host in hosts}
+    return origins
+
+
+class RedactTokenFilter(logging.Filter):
+    """Access log không được giữ access token trong query string."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN_QUERY.sub(r"\1***", item) if isinstance(item, str) else item
+                for item in record.args
+            )
+        return True

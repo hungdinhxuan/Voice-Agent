@@ -1,15 +1,18 @@
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig
 from app.web.events import EventBroker
 from app.web.server import (
     STATIC_DIR,
+    RedactTokenFilter,
     _authorized,
     _origin_allowed,
     _receive_actions,
@@ -64,6 +67,17 @@ def test_event_broker_drops_new_audio_if_queue_only_contains_control() -> None:
     assert broker.dropped == 1
 
 
+def test_event_broker_never_drops_playback_control_events() -> None:
+    broker = EventBroker(history_size=0, queue_size=2)
+    queue = broker.subscribe()
+    broker.publish({"type": "audio_end", "turn_id": 1})
+    broker.publish({"type": "state", "state": "SPEAKING"})
+    broker.publish({"type": "audio_clear", "turn_id": 1})
+
+    assert [queue.get_nowait()["type"] for _ in range(2)] == ["audio_end", "audio_clear"]
+    assert broker.dropped == 1
+
+
 def test_web_assets_exist() -> None:
     for name in ("index.html", "app.js", "styles.css", "mic-processor.js"):
         assert (Path(STATIC_DIR) / name).is_file()
@@ -75,6 +89,7 @@ def test_models_api_is_exposed_with_complete_catalog() -> None:
 
     assert response.status_code == 200
     assert set(response.json()["models"]) == {"asr", "llm", "tts", "vad"}
+    assert set(response.json()["languages"]) == {"vi", "en"}
     assert "/api/models" in app.openapi()["paths"]
     assert "/api/sessions" in app.openapi()["paths"]
     assert "/api/runtime" in app.openapi()["paths"]
@@ -135,6 +150,8 @@ def test_dashboard_renders_model_catalog() -> None:
     assert 'id="models"' in html
     assert 'href="/api/models"' in html
     assert "function renderModels(models)" in script
+    assert 'id="language-switch"' in html
+    assert "set_language" in script
 
 
 def test_web_mode_uses_browser_microphone_and_speaker() -> None:
@@ -203,3 +220,84 @@ async def test_websocket_routes_pcm_from_every_client() -> None:
     for session in sessions:
         np.testing.assert_array_equal(session.push_audio.call_args.args[0], frame)
         assert session.handle_action.call_count == 2
+
+
+def test_loopback_origin_rejects_other_websites() -> None:
+    config = AppConfig()
+
+    assert _origin_allowed(None, config)
+    assert _origin_allowed("http://127.0.0.1:8080", config)
+    assert _origin_allowed("http://localhost:8080", config)
+    assert not _origin_allowed("https://evil.example", config)
+    assert (
+        TestClient(create_web_app(config))
+        .get("/api/models", headers={"Origin": "https://evil.example"})
+        .status_code
+        == 403
+    )
+
+
+def test_websocket_rejects_clients_beyond_the_session_cap() -> None:
+    config = AppConfig()
+    config.web.max_sessions = 1
+    app = create_web_app(config)
+    app.state.sessions = Mock()
+    app.state.sessions.count = 1
+    client = TestClient(app)
+
+    with pytest.raises(WebSocketDisconnect) as rejection:
+        with client.websocket_connect("/ws"):
+            pass
+
+    assert rejection.value.code == 1013
+    app.state.sessions.open.assert_not_called()
+
+
+def test_access_log_redacts_token_query() -> None:
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1", "GET", "/api/models?token=supersecret&x=1", "1.1", 200),
+        None,
+    )
+
+    assert RedactTokenFilter().filter(record)
+    assert "supersecret" not in record.getMessage()
+    assert "token=***" in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_malformed_frames_keep_the_session_open() -> None:
+    packets = iter(
+        [
+            {"type": "websocket.receive", "bytes": b"too short"},
+            {"type": "websocket.receive", "text": "{not json"},
+            {
+                "type": "websocket.receive",
+                "text": json.dumps({"action": "interrupt"}),
+            },
+            {"type": "websocket.disconnect"},
+        ]
+    )
+    websocket = Mock()
+    websocket.receive = AsyncMock(side_effect=lambda: next(packets))
+    session = Mock()
+    session.handle_action = AsyncMock()
+
+    await _receive_actions(websocket, session, frame_samples=512)
+
+    assert session.report_protocol_error.call_count == 2
+    session.handle_action.assert_awaited_once_with({"action": "interrupt"})
+
+
+def test_same_origin_check_can_be_disabled_for_development() -> None:
+    config = AppConfig()
+    config.web.require_same_origin = False
+
+    assert _origin_allowed("https://evil.example", config)
+
+    config.web.allowed_origins = ["https://voice.local"]
+    assert not _origin_allowed("https://evil.example", config)

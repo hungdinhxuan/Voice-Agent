@@ -10,10 +10,16 @@
   <main class="shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">LOCAL · PRIVATE · VIETNAMESE</p>
+        <p class="eyebrow">LOCAL · PRIVATE · BILINGUAL</p>
         <h1>Voice Agent</h1>
       </div>
-      <div class="connection"><span id="connection-dot"></span><span id="connection">Đang kết nối</span></div>
+      <div class="topbar-actions">
+        <div id="language-switch" class="language-switch" role="group" aria-label="Conversation language" aria-busy="false">
+          <button type="button" data-language="vi" aria-pressed="true" disabled>VI <span>Tiếng Việt</span></button>
+          <button type="button" data-language="en" aria-pressed="false" disabled>EN <span>English</span></button>
+        </div>
+        <div class="connection"><span id="connection-dot"></span><span id="connection">Đang kết nối</span></div>
+      </div>
     </header>
 
     <section class="status-card">
@@ -23,6 +29,7 @@
         <h2 id="state">Khởi động</h2>
         <p id="hint">Đang tải model cục bộ…</p>
         <p id="microphone-status" class="microphone-status">Đang chờ quyền audio…</p>
+        <p id="language-status" class="language-status" role="status" aria-live="polite">Tiếng Việt đang hoạt động.</p>
       </div>
       <div class="status-actions">
         <div class="model-pill"><span id="backend">—</span><strong id="model">—</strong></div>

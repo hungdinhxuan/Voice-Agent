@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar, get_type_hints
 from urllib.parse import urlparse
@@ -39,7 +39,7 @@ class VADConfig:
 class ASRConfig:
     backend: str = "parakeet"
     model: str = "nvidia/parakeet-ctc-0.6b-Vietnamese"
-    checkpoint_file: str = "parakeet-ctc-0.6b-vi.nemo"
+    checkpoint_file: str | None = "parakeet-ctc-0.6b-vi.nemo"
     device: str = "cuda"
     dtype: str = "bfloat16"
     language: str | None = "vi"
@@ -72,16 +72,22 @@ class WebConfig:
     tls_certfile: str | None = None
     tls_keyfile: str | None = None
     allowed_origins: list[str] = field(default_factory=list)
+    require_same_origin: bool = True
     playback_prebuffer_ms: int = 120
+    default_language: str = "vi"
+    max_sessions: int = 4
 
 
 @dataclass(slots=True)
 class TTSConfig:
+    provider: str = "vieneu"
+    model: str = "VieNeu-TTS v3 Turbo"
     backend: str = "onnx"
     device: str = "cpu"
     precision: str = "int8"
     voice: str | None = None
     sample_rate: int = 48000
+    lang_code: str | None = None
 
 
 @dataclass(slots=True)
@@ -105,6 +111,41 @@ class RuntimeConfig:
 
 
 @dataclass(slots=True)
+class EnglishConfig:
+    asr: ASRConfig = field(
+        default_factory=lambda: ASRConfig(
+            model="nvidia/parakeet-tdt-0.6b-v3",
+            checkpoint_file=None,
+            language="en",
+        )
+    )
+    tts: TTSConfig = field(
+        default_factory=lambda: TTSConfig(
+            provider="kokoro",
+            model="hexgrad/Kokoro-82M",
+            backend="pytorch",
+            device="cpu",
+            precision="float32",
+            voice="af_heart",
+            sample_rate=24000,
+            lang_code="a",
+        )
+    )
+    conversation: ConversationConfig = field(
+        default_factory=lambda: ConversationConfig(
+            system_prompt=(
+                "You are a concise conversational voice assistant. Reply naturally in "
+                "English. Avoid Markdown unless it is necessary, and prefer text that "
+                "is easy to speak aloud."
+            )
+        )
+    )
+    interrupt_phrases: list[str] = field(
+        default_factory=lambda: ["stop", "stop talking", "please stop", "be quiet"]
+    )
+
+
+@dataclass(slots=True)
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VADConfig = field(default_factory=VADConfig)
@@ -115,6 +156,7 @@ class AppConfig:
     tts_chunker: ChunkerConfig = field(default_factory=ChunkerConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    english: EnglishConfig = field(default_factory=EnglishConfig)
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -145,10 +187,9 @@ class AppConfig:
             for phrase in self.audio.interrupt_phrases
         ):
             raise ConfigError("audio.interrupt_phrases phải chứa ít nhất một cụm từ hợp lệ.")
-        if self.asr.backend not in {"parakeet", "qwen3"}:
-            raise ConfigError("asr.backend chỉ hỗ trợ parakeet hoặc qwen3.")
-        if self.asr.backend == "parakeet" and not self.asr.checkpoint_file:
-            raise ConfigError("asr.checkpoint_file không được rỗng với Parakeet.")
+        for language, profile in (("vi", self), ("en", self.for_language("en"))):
+            if profile.asr.backend not in {"parakeet", "qwen3"}:
+                raise ConfigError(f"{language}.asr.backend chỉ hỗ trợ parakeet hoặc qwen3.")
         if not 0 < self.vad.threshold < 1:
             raise ConfigError("vad.threshold phải nằm giữa 0 và 1.")
         if min(self.vad.min_speech_ms, self.vad.min_silence_ms, self.vad.speech_pad_ms) < 0:
@@ -189,10 +230,52 @@ class AppConfig:
                 raise ConfigError("Web trên LAN cần web.allowed_origins.")
         if not 0 <= self.web.playback_prebuffer_ms <= 1000:
             raise ConfigError("web.playback_prebuffer_ms phải nằm trong 0..1000.")
-        if self.tts.backend != "onnx" or self.tts.device != "cpu":
-            raise ConfigError("Milestone 1 chỉ hỗ trợ VieNeu backend=onnx, device=cpu.")
+        if self.web.default_language not in {"vi", "en"}:
+            raise ConfigError("web.default_language chỉ hỗ trợ vi hoặc en.")
+        if self.web.max_sessions < 1:
+            raise ConfigError("web.max_sessions phải lớn hơn 0.")
+        for language, tts in (("vi", self.tts), ("en", self.english.tts)):
+            if tts.provider == "vieneu":
+                if tts.backend != "onnx" or tts.device != "cpu":
+                    raise ConfigError(
+                        f"{language}.tts VieNeu chỉ hỗ trợ backend=onnx, device=cpu."
+                    )
+            elif tts.provider == "kokoro":
+                if tts.sample_rate != 24000 or tts.lang_code not in {"a", "b"}:
+                    raise ConfigError(
+                        f"{language}.tts Kokoro cần sample_rate=24000 và lang_code a hoặc b."
+                    )
+                if not tts.voice:
+                    raise ConfigError(f"{language}.tts Kokoro cần voice.")
+            else:
+                raise ConfigError(f"{language}.tts.provider không được hỗ trợ: {tts.provider}")
         if self.audio.output_sample_rate != self.tts.sample_rate:
             raise ConfigError("audio.output_sample_rate phải bằng tts.sample_rate.")
+
+    def for_language(self, language: str) -> "AppConfig":
+        code = language.casefold()
+        if code == "vi":
+            return replace(
+                self,
+                audio=replace(
+                    self.audio,
+                    interrupt_phrases=list(self.audio.interrupt_phrases),
+                    output_sample_rate=self.tts.sample_rate,
+                ),
+            )
+        if code == "en":
+            return replace(
+                self,
+                audio=replace(
+                    self.audio,
+                    interrupt_phrases=list(self.english.interrupt_phrases),
+                    output_sample_rate=self.english.tts.sample_rate,
+                ),
+                asr=self.english.asr,
+                tts=self.english.tts,
+                conversation=self.english.conversation,
+            )
+        raise ConfigError(f"Ngôn ngữ không được hỗ trợ: {language}")
 
 
 T = TypeVar("T")

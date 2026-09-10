@@ -52,14 +52,20 @@ web:
   tls_certfile: null
   tls_keyfile: null
   allowed_origins: []
+  require_same_origin: false
   playback_prebuffer_ms: 120
+  default_language: vi
+  max_sessions: 4
 
 tts:
+  provider: vieneu
+  model: VieNeu-TTS v3 Turbo
   backend: onnx
   device: cpu
   precision: int8
   voice: null
   sample_rate: 48000
+  lang_code: null
 
 tts_chunker:
   min_chars: 15
@@ -79,3 +85,34 @@ runtime:
   max_concurrent_asr: 1
   max_concurrent_llm: 1
   max_concurrent_tts: 1
+
+english:
+  asr:
+    backend: parakeet
+    model: nvidia/parakeet-tdt-0.6b-v3
+    checkpoint_file: null
+    device: cuda
+    dtype: bfloat16
+    language: en
+    max_new_tokens: 256
+  tts:
+    provider: kokoro
+    model: hexgrad/Kokoro-82M
+    backend: pytorch
+    device: cuda
+    precision: float32
+    voice: af_heart
+    sample_rate: 24000
+    lang_code: a
+  conversation:
+    max_history_turns: 20
+    system_prompt: |-
+      You are a concise conversational voice assistant.
+      Reply naturally in English.
+      Avoid Markdown unless it is necessary.
+      Prefer text that is easy to speak aloud.
+  interrupt_phrases:
+    - stop
+    - stop talking
+    - please stop
+    - be quiet

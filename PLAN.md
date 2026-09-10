@@ -8,20 +8,23 @@ Updated 2026-09-10. The original single-user local pipeline below is operational
 - [x] M3 — make stop phrases accent/case tolerant, reject long conversational false positives, request browser AEC/noise suppression and expose actual track capabilities.
 - [x] M4 — normalize Markdown, URLs, email, dates, units, currency and common technical abbreviations before TTS without changing UI text.
 - [x] M5 — expose `/api/runtime` and `/api/sessions`, track queue pressure/audio gaps, and require TLS + token + origin allowlist when binding outside loopback.
+- [x] M5.1 — add per-session VI/EN switching with lazy English Parakeet TDT v3 + Kokoro-82M loading, rollback on load failure, localized UI state, and bilingual model APIs.
+- [x] M5.2 — harden the browser transport: enforce same-origin WebSocket/API access on loopback, bound playback acknowledgement waits, keep a session alive through malformed frames, cap concurrent sessions (`web.max_sessions`), never drop `audio_end`/`audio_clear` under queue pressure, and redact access tokens from the access log.
+- [ ] M5.3 — move Silero VAD off the event loop, truncate history against a token budget instead of a turn count, and keep per-metric samples so `/api/sessions` can report p50/p95.
 - [ ] M6 — integrate and smoke-test a native streaming Vietnamese ASR backend. Candidate: `nvidia/nemotron-3.5-asr-streaming-0.6b`; keep Parakeet CTC as rollback.
 - [ ] M7 — add session resume/persistence, Opus transport and hardware-tested XiaoZhi/ESP32 support after M6 latency and long-conversation gates pass.
 
 Acceptance gates for completed web work: two clients can speak independently; one client cannot mutate another's history/playback; model adapters load once; binary audio has a version and sequence; LAN mode fails closed without TLS/token/origins; model-free test suite passes.
 
-Build a fully local, open-source, real-time Vietnamese voice conversation application that runs on a single PC.
+Build a fully local, open-source, real-time Vietnamese/English voice conversation application that runs on a single PC.
 
 The final goal is:
 
 Microphone  
 → Silero VAD  
-→ NVIDIA Parakeet CTC 0.6B Vietnamese  
+→ VI: NVIDIA Parakeet CTC 0.6B Vietnamese / VieNeu-TTS  
+→ EN: NVIDIA Parakeet TDT 0.6B v3 / Kokoro-82M  
 → Qwen3.5-4B  
-→ VieNeu-TTS v3 Turbo  
 → Speaker
 
 The application must work completely locally after model files have been downloaded. Do not use OpenAI API, Gemini API, cloud ASR, cloud TTS, or any paid/external inference service.

@@ -35,6 +35,7 @@ class VoiceOrchestrator:
         speaker: AudioOutput | None = None,
         use_local_microphone: bool = True,
         runtime: ModelRuntime | None = None,
+        language: str | None = None,
     ) -> None:
         self.config = config
         self._event_handler = event_handler
@@ -46,9 +47,10 @@ class VoiceOrchestrator:
         self.vad: SileroVADSegmenter | None = None
         self.runtime = runtime or ModelRuntime(config)
         self._owns_runtime = runtime is None
-        self.asr = self.runtime.asr
+        self.language = language or config.asr.language or self.runtime.default_language
+        self.asr = self.runtime.asr_for(self.language)
         self.llm = self.runtime.llm
-        self.tts = self.runtime.tts
+        self.tts = self.runtime.tts_for(self.language)
         self.speaker = speaker or SpeakerOutput(config.audio)
         self._audio_frames: asyncio.Queue[np.ndarray] | None = (
             None if use_local_microphone else asyncio.Queue(maxsize=64)
@@ -71,9 +73,9 @@ class VoiceOrchestrator:
             )
             if self._owns_runtime:
                 self._log("[APP] Đang load model runtime...")
-                await self.runtime.load()
-            elif not self.runtime.loaded:
-                raise RuntimeError("Model runtime dùng chung chưa được load.")
+                await self.runtime.load_language(self.language)
+            elif not self.runtime.is_language_loaded(self.language):
+                raise RuntimeError(f"Model runtime cho {self.language} chưa được load.")
             await self.speaker.start()
             speaker_started = True
             self._log("[APP] Sẵn sàng. Hãy nói tiếng Việt. Nhấn Ctrl+C để dừng.")
@@ -83,6 +85,7 @@ class VoiceOrchestrator:
                 model=self.config.llm.model,
                 asr_backend=self.config.asr.backend,
                 asr_model=self.config.asr.model,
+                language=self.language,
             )
             await self._listen_forever()
         finally:
@@ -204,6 +207,7 @@ class VoiceOrchestrator:
                 audio,
                 self.config.audio.sample_rate,
                 cancellation,
+                language=self.language,
             )
         except Exception as exc:
             self._log(
@@ -231,6 +235,7 @@ class VoiceOrchestrator:
                 audio,
                 self.config.audio.sample_rate,
                 cancellation,
+                language=self.language,
             )
             timing.asr_finished = time.perf_counter()
             self._log(f"[ASR] {text}")
@@ -345,12 +350,16 @@ class VoiceOrchestrator:
             text = await text_queue.get()
             if text is None:
                 return
-            text = prepare_for_speech(text)
+            text = prepare_for_speech(text, language=self.language)
             if not text:
                 continue
             if timing.tts_started is None:
                 timing.tts_started = time.perf_counter()
-            async for audio in self.runtime.synthesize_stream(text, cancellation):
+            async for audio in self.runtime.synthesize_stream(
+                text,
+                cancellation,
+                language=self.language,
+            ):
                 if timing.first_audio is None:
                     timing.first_audio = time.perf_counter()
                     self._transition(ConversationState.SPEAKING)
@@ -415,8 +424,18 @@ def _usable_transcript(text: str) -> bool:
 
 def _matches_interrupt_phrase(text: str, phrases: list[str]) -> bool:
     normalized_text = _normalize_phrase(text)
-    prefixes = ("", "hay ", "lam on ", "vui long ")
-    suffixes = {"", "di", "nhe", "voi", "ngay", "duoc roi", "giup toi"}
+    prefixes = ("", "hay ", "lam on ", "vui long ", "please ")
+    suffixes = {
+        "",
+        "di",
+        "nhe",
+        "voi",
+        "ngay",
+        "duoc roi",
+        "giup toi",
+        "please",
+        "now",
+    }
     for prefix in prefixes:
         if prefix and not normalized_text.startswith(prefix):
             continue

@@ -6,6 +6,9 @@ from collections import deque
 from typing import Any
 
 
+_PLAYBACK_CONTROL = frozenset({"audio_end", "audio_clear"})
+
+
 class EventBroker:
     def __init__(self, history_size: int = 200, queue_size: int = 256) -> None:
         self._history: deque[dict[str, Any]] = deque(maxlen=history_size)
@@ -37,21 +40,14 @@ class EventBroker:
         while not queue.empty():
             buffered.append(queue.get_nowait())
 
-        audio_index = next(
-            (
-                index
-                for index, item in enumerate(buffered)
-                if item.get("type") == "audio_chunk"
-            ),
-            None,
-        )
-        if incoming.get("type") == "audio_chunk" and audio_index is None:
+        victim = _victim_index(buffered, incoming)
+        if victim is None:
             for item in buffered:
                 queue.put_nowait(item)
             self._dropped += 1
             return False
 
-        del buffered[audio_index if audio_index is not None else 0]
+        del buffered[victim]
         for item in buffered:
             queue.put_nowait(item)
         self._dropped += 1
@@ -67,3 +63,20 @@ class EventBroker:
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._subscribers.discard(queue)
+
+
+def _victim_index(
+    buffered: list[dict[str, Any]],
+    incoming: dict[str, Any],
+) -> int | None:
+    """Drop audio first, then other events, and never a playback control event."""
+
+    for index, item in enumerate(buffered):
+        if item.get("type") == "audio_chunk":
+            return index
+    if incoming.get("type") == "audio_chunk":
+        return None
+    for index, item in enumerate(buffered):
+        if item.get("type") not in _PLAYBACK_CONTROL:
+            return index
+    return 0 if incoming.get("type") in _PLAYBACK_CONTROL else None

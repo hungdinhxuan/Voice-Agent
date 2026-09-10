@@ -83,6 +83,32 @@ async def test_model_runtime_loads_shared_models_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_runtime_lazy_loads_english_models_once() -> None:
+    vi_asr, en_asr = FakeASR(), FakeASR()
+    vi_tts, en_tts = FakeTTS(), FakeTTS()
+    llm = FakeLLM()
+    runtime = ModelRuntime(
+        AppConfig(),
+        asr=vi_asr,
+        llm=llm,
+        tts=vi_tts,
+        english_asr=en_asr,
+        english_tts=en_tts,
+    )
+
+    await runtime.load()
+    assert (vi_asr.loads, vi_tts.loads, en_asr.loads, en_tts.loads) == (1, 1, 0, 0)
+
+    await runtime.load_language("en")
+    await runtime.load_language("en")
+
+    assert (en_asr.loads, en_tts.loads, llm.loads) == (1, 1, 1)
+    assert runtime.snapshot()["languages"]["en"]["loaded"]
+    await runtime.close()
+    assert (vi_asr.closes, vi_tts.closes, en_asr.closes, en_tts.closes) == (1, 1, 1, 1)
+
+
+@pytest.mark.asyncio
 async def test_model_runtime_limits_concurrent_asr() -> None:
     release = asyncio.Event()
 

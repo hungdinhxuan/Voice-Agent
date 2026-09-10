@@ -1,16 +1,12 @@
-# Local Vietnamese Voice Agent
+# Local Bilingual Voice Agent
 
-Ứng dụng hội thoại giọng nói tiếng Việt chạy hoàn toàn trên một máy:
+Ứng dụng hội thoại giọng nói tiếng Việt/Anh chạy hoàn toàn trên một máy:
 
 ```text
-Microphone (16 kHz mono)
-  -> Silero VAD (ONNX/CPU)
-  -> NVIDIA Parakeet CTC 0.6B Vietnamese (GPU)
-  -> Qwen3.5-4B Q4_K_M qua Ollama, streaming text (GPU)
-  -> sentence chunker
-  -> VieNeu-TTS v3 Turbo (ONNX/CPU)
-  -> playback queue (48 kHz mono)
-  -> Speaker
+Microphone (16 kHz mono) -> Silero VAD
+  -> VI: Parakeet CTC Vietnamese -> Qwen3.5 -> VieNeu-TTS (48 kHz)
+  -> EN: Parakeet TDT v3        -> Qwen3.5 -> Kokoro-82M (24 kHz)
+  -> Browser speaker
 ```
 
 Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inference bên ngoài. Bản đầu tiên dành cho một người dùng với headset microphone và headphones.
@@ -19,14 +15,15 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 
 - Đã tích hợp Silero VAD qua API Python chính thức và ONNX Runtime.
 - Đã tích hợp `nvidia/parakeet-ctc-0.6b-Vietnamese` qua NVIDIA NeMo 2.6.
+- Đã tích hợp English ASR `nvidia/parakeet-tdt-0.6b-v3` và English TTS `hexgrad/Kokoro-82M`.
 - Đã tích hợp `qwen3.5:4b` qua Ollama local API, streaming NDJSON và giữ model trong VRAM.
 - Transformers vẫn là backend dự phòng qua `llm.backend: transformers`.
 - Đã tích hợp VieNeu-TTS v3 Turbo qua SDK `vieneu`, backend ONNX/CPU và `infer_stream` native.
 - Đã có utterance segmentation, conversation history, text chunking, playback queue, latency logs và barge-in bằng câu lệnh ngắt.
 - Đã có test cho chunker, history, state, cancellation, config, runtime dùng chung, session web và binary audio protocol.
-- Đã có web voice client dùng microphone/loa của trình duyệt. Mỗi kết nối có VAD, history và playback độc lập; ASR/LLM/TTS dùng chung model runtime có giới hạn concurrency.
+- Web có switch VI/EN theo từng session. VI preload khi khởi động; English model lazy-load lần đầu chọn EN rồi được dùng chung cho các client.
 
-Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB cho thấy Parakeet nhận đúng câu tiếng Việt mẫu dài 2,4 giây trong khoảng 0,39–0,55 giây. Full pipeline cùng TTS và Ollama cũng đã khởi động thành công. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
+Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB đã load đồng thời hai Parakeet cùng Ollama, switch WebSocket VI→EN thành công và Kokoro sinh PCM float32 24 kHz. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
 ## Yêu cầu
 
@@ -76,6 +73,7 @@ Tải Parakeet vào Hugging Face cache:
 
 ```bash
 uv run hf download nvidia/parakeet-ctc-0.6b-Vietnamese parakeet-ctc-0.6b-vi.nemo
+uv run hf download nvidia/parakeet-tdt-0.6b-v3 parakeet-tdt-0.6b-v3.nemo
 ```
 
 Chỉ tải model Transformers LLM nếu dùng backend dự phòng:
@@ -91,6 +89,14 @@ uv run python main.py --test-tts
 ```
 
 Lệnh này phát một câu kiểm tra. Sau khi ba bước trên hoàn tất, có thể chặn truy cập mạng:
+
+Kokoro và voice `af_heart` được tải lần đầu khi chọn **EN** trên UI. Có thể tải trước toàn bộ repository để chuẩn bị offline:
+
+```bash
+uv run hf download hexgrad/Kokoro-82M
+```
+
+`uv sync` cũng cài sẵn English G2P và spaCy `en_core_web_sm`; không cần cài `espeak-ng` thủ công trên Windows.
 
 PowerShell:
 
@@ -141,13 +147,17 @@ uv run python main.py --web
 
 Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM float32 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Mỗi tab/client là một session hội thoại độc lập; client này không thể ghi âm, xóa history hoặc ngắt playback của client khác. Model chỉ được load một lần và inference được điều phối bằng hàng đợi dùng chung. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
 
-Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON được expose tại `GET /api/models`, `GET /api/runtime`, `GET /api/sessions`; trạng thái tiến trình nằm tại `GET /health`. Mặc định server chỉ bind loopback.
+Chọn **VI · Tiếng Việt** hoặc **EN · English** ở góc trên. Khi đổi ngôn ngữ, UI dừng microphone/turn hiện tại, hiển thị trạng thái tải model và tạo history mới với system prompt tương ứng. Nếu model mới load lỗi, session giữ nguyên ngôn ngữ cũ. Hãy bật lại microphone sau khi switch hoàn tất.
+
+Dashboard hiển thị metadata của pipeline đang chọn. `GET /api/models` expose cả catalog `vi` và `en`; `GET /api/runtime` cho biết profile nào đã load; `GET /api/sessions` gồm ngôn ngữ từng client. Trạng thái tiến trình nằm tại `GET /health`. Mặc định server chỉ bind loopback.
 
 Khi agent đang nói, browser vẫn thu để nhận lệnh ngắt. Câu khớp `audio.interrupt_phrases` như `dừng`, `dừng lại`, `ngừng`, `thôi` được nhận không phân biệt dấu, hoa/thường và chấp nhận tiền/hậu tố lịch sự ngắn. Nội dung hội thoại dài không khớp sẽ bị bỏ qua. Nút **Ngắt phản hồi** vẫn dừng ngay lập tức.
 
 Trước khi gọi TTS, ứng dụng chuẩn hóa quote, Markdown, URL, email, ngày tháng, đơn vị, viết tắt, emoji và ký hiệu không có ích cho phát âm; `...` được đổi thành dấu chấm. Transcript và câu trả lời hiển thị trên UI vẫn giữ nguyên nội dung model.
 
 TTS đi từ server tới browser bằng frame nhị phân `binary-pcm-v1`: header little-endian 24 byte (`VAO1`, `turn_id`, `sample_rate`, `sequence`, `timestamp`) rồi tới PCM float32. JSON chỉ còn dùng cho control/event. Client cũ vẫn có thể đọc JSON audio trong giai đoạn chuyển đổi, nhưng server mới chỉ phát frame nhị phân.
+
+`web.require_same_origin` quyết định server có chỉ chấp nhận WebSocket và API từ Origin trùng host/port đang phục vụ hay không. WebSocket không bị CORS chặn, nên khi tắt kiểm tra này thì một trang web bất kỳ đang mở trong cùng browser có thể tạo session và đọc transcript; mặc định của code là `true`, còn `config.yaml` trong repository đặt `false` cho máy phát triển. Nếu `web.allowed_origins` có giá trị thì danh sách đó luôn được áp dụng, bất kể cờ này. Request không có header `Origin` (curl, script cục bộ) vẫn được chấp nhận. Access token nằm trong query string được che trong access log của uvicorn.
 
 Nếu mở ra LAN, cấu hình bắt buộc `web.access_token` tối thiểu 16 ký tự, TLS certificate/key và `web.allowed_origins`. Truy cập UI bằng `https://host:port/?token=...`; UI tự chuyển token sang WebSocket và link API. Không commit token thật vào repository.
 
@@ -168,9 +178,15 @@ Chỉnh `config.yaml`:
 - `llm.backend`: mặc định `ollama`; đặt `transformers` để dùng backend cũ.
 - `llm.context_length`: mặc định 4096, đủ cho hội thoại ngắn và giảm KV cache.
 - `web.host` và `web.port`: mặc định `127.0.0.1:8080` để không mở dịch vụ ra mạng LAN.
+- `web.default_language`: `vi` hoặc `en`; profile mặc định được preload khi server khởi động.
 - `web.playback_prebuffer_ms`: buffer phát ban đầu, mặc định 120 ms để giảm hụt tiếng khi TTS có jitter.
+- `web.max_sessions`: số client WebSocket đồng thời tối đa, mặc định 4. Client vượt quá bị đóng với mã 1013.
+- `web.require_same_origin`: mặc định `true` trong code, `false` trong `config.yaml` của repository. Đặt `true` khi không còn phát triển cục bộ.
 - `web.access_token`, `web.tls_certfile`, `web.tls_keyfile`, `web.allowed_origins`: bắt buộc khi `web.host` không phải loopback.
 - `runtime.max_concurrent_asr/llm/tts`: số inference đồng thời trên model dùng chung; mặc định 1 để tránh vượt VRAM và giữ latency ổn định.
+- `english.asr`: English Parakeet TDT v3; `checkpoint_file: null` dùng NeMo `from_pretrained`.
+- `english.tts`: Kokoro-82M, voice mặc định `af_heart`, American English `lang_code: a`, output 24 kHz.
+- `english.conversation` và `english.interrupt_phrases`: prompt tiếng Anh và các câu ngắt như `stop`, `please stop`.
 - `tts.voice`: để `null` dùng preset đầu tiên, hoặc dùng nhãn từ `Vieneu.list_preset_voices()`.
 - `tts_chunker`: cân bằng câu tự nhiên với độ trễ TTS đầu tiên.
 
@@ -240,6 +256,9 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 - VieNeu stream frame audio bên trong mỗi text chunk. Khoảng nghỉ vẫn có thể xuất hiện nếu TTS tạo chậm hơn playback.
 - Web yêu cầu AEC/noise suppression/auto gain của browser và expose capability thực tế qua `GET /api/sessions`, nhưng chưa có server-side AEC hoặc kiểm chứng cho mọi thiết bị.
 - Parakeet CTC hiện chạy theo utterance. Barge-in vì vậy chỉ có hiệu lực sau khi VAD kết thúc câu ngắt, chưa phải partial streaming ASR.
+- English Parakeet TDT hiện cũng dùng utterance-level `transcribe`; chưa bật chunked streaming.
+- Lần switch EN đầu tiên có thể mất vài phút để tải model. Sau khi cache đầy, smoke test cùng máy mất khoảng 44 giây để load English ASR + TTS; các lần switch sau trong cùng process gần như tức thời.
+- Sau khi VI và EN cùng được dùng, cả hai ASR giữ trong bộ nhớ để các session chạy độc lập; cần theo dõi VRAM nếu thay LLM/model lớn hơn.
 - `nvidia/nemotron-3.5-asr-streaming-0.6b` có native cache-aware streaming và hỗ trợ `vi-VN`, nhưng chưa được tích hợp/smoke-test trong project.
 - Mỗi web session có một Silero VAD instance riêng để giữ state độc lập. ASR/LLM/TTS mới là model runtime dùng chung.
 - WebSocket truyền PCM thô, chưa dùng Opus; bandwidth cao hơn phương án dành cho ESP32/WAN.
@@ -247,18 +266,25 @@ Chạy ba lệnh tải model khi còn Internet. Sau đó thử từng diagnostic
 - Ollama `qwen3.5:4b` và Parakeet CTC 0.6B chạy đồng thời trong giới hạn VRAM 16 GB trên máy smoke test.
 - Backend Transformers vẫn dùng torch fallback nếu chọn lại; smoke test cũ đo first text khoảng 1.5 giây.
 - Một lệnh TTS hoặc ASR đang chạy trong worker thread không thể dừng kernel ngay lập tức. Cancellation bỏ kết quả và dọn queue; worker kết thúc phép inference đang chạy.
+- Nếu browser không gửi ack playback (tab bị ẩn, AudioContext bị treo), server chờ tối đa thời lượng audio đã gửi cộng 3 giây rồi ghi log và kết thúc lượt. Phía người nghe có thể mất phần đuôi câu trả lời.
+- Frame WebSocket hỏng chỉ sinh event `protocol_error` và bị bỏ qua; session không bị đóng nhưng cũng không có cơ chế yêu cầu client gửi lại.
+- Silero VAD vẫn chạy đồng bộ trên event loop, mỗi session một instance; nhiều client đồng thời sẽ làm tăng jitter của toàn bộ pipeline.
+- History cắt theo số lượt (`conversation.max_history_turns`), chưa theo ngân sách token của `llm.context_length`.
 - Session mất history khi WebSocket ngắt; chưa có resume/persistence.
 - Chưa tích hợp camera, robot movement, MCP, XiaoZhi/ESP32, wake word, RAG hoặc cloud service.
 
 ## Nguồn API chính thức
 
 - NVIDIA Parakeet Vietnamese model card: <https://huggingface.co/nvidia/parakeet-ctc-0.6b-Vietnamese>
+- NVIDIA Parakeet TDT v3 model card: <https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3>
 - NVIDIA NeMo ASR: <https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/intro.html>
 - NVIDIA Nemotron streaming ASR: <https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b>
 - Qwen3.5-4B model card: <https://huggingface.co/Qwen/Qwen3.5-4B>
 - Qwen3.5:4b trên Ollama: <https://ollama.com/library/qwen3.5:4b>
 - Ollama local API: <https://docs.ollama.com/api/introduction>
 - VieNeu-TTS: <https://github.com/pnnbao97/VieNeu-TTS>
+- Kokoro-82M: <https://huggingface.co/hexgrad/Kokoro-82M>
+- Kokoro Python runtime: <https://github.com/hexgrad/kokoro>
 - Silero VAD: <https://github.com/snakers4/silero-vad>
 
 ## Bước tối ưu tiếp theo

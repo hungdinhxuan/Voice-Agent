@@ -15,6 +15,9 @@ _REPEATED_PUNCTUATION = re.compile(r"([,!?:;])(?:\s*\1)+")
 _MARKUP = str.maketrans("", "", "*_#`~\"'“”‘’")
 _BRACKETS = str.maketrans({character: " " for character in "[]{}()<>|\\/"})
 _SPOKEN_SYMBOLS = str.maketrans({"&": " và ", "%": " phần trăm ", "+": " cộng ", "=": " bằng "})
+_SPOKEN_SYMBOLS_EN = str.maketrans(
+    {"&": " and ", "%": " percent ", "+": " plus ", "=": " equals "}
+)
 _PROSODY = frozenset(".,!?;:")
 _UNITS = {
     "kg": " ki lô gam",
@@ -37,21 +40,27 @@ _ABBREVIATIONS = {
 }
 
 
-def prepare_for_speech(text: str) -> str:
+def prepare_for_speech(text: str, language: str = "vi") -> str:
     """Keep words and useful prosody while removing markup TTS may pronounce."""
 
     normalized = unicodedata.normalize("NFC", html.unescape(text))
     normalized = _MARKDOWN_LINK.sub(r"\1", normalized)
-    normalized = _EMAIL.sub(" địa chỉ email ", normalized)
-    normalized = _URL.sub(" đường dẫn ", normalized)
-    normalized = _DATE.sub(r"ngày \1 tháng \2 năm \3", normalized)
-    normalized = _UNIT.sub(lambda match: _UNITS[match.group(1).casefold()], normalized)
-    normalized = re.sub(r"\$(\d[\d.,]*)", r"\1 đô la", normalized)
-    for abbreviation, spoken in _ABBREVIATIONS.items():
-        normalized = re.sub(rf"\b{abbreviation}\b", spoken, normalized)
+    if language == "en":
+        normalized = _EMAIL.sub(" email address ", normalized)
+        normalized = _URL.sub(" link ", normalized)
+        spoken_symbols = _SPOKEN_SYMBOLS_EN
+    else:
+        normalized = _EMAIL.sub(" địa chỉ email ", normalized)
+        normalized = _URL.sub(" đường dẫn ", normalized)
+        normalized = _DATE.sub(r"ngày \1 tháng \2 năm \3", normalized)
+        normalized = _UNIT.sub(lambda match: _UNITS[match.group(1).casefold()], normalized)
+        normalized = re.sub(r"\$(\d[\d.,]*)", r"\1 đô la", normalized)
+        for abbreviation, spoken in _ABBREVIATIONS.items():
+            normalized = re.sub(rf"\b{abbreviation}\b", spoken, normalized)
+        spoken_symbols = _SPOKEN_SYMBOLS
     normalized = re.sub(r"\s*\n+\s*", ". ", normalized)
     normalized = _ELLIPSIS.sub(".", normalized)
-    normalized = normalized.translate(_SPOKEN_SYMBOLS).translate(_MARKUP).translate(_BRACKETS)
+    normalized = normalized.translate(spoken_symbols).translate(_MARKUP).translate(_BRACKETS)
 
     safe: list[str] = []
     for character in normalized:

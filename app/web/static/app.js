@@ -7,6 +7,9 @@ const conversation = document.querySelector('#conversation');
 const logs = document.querySelector('#logs');
 const micButton = document.querySelector('#microphone');
 const micStatus = document.querySelector('#microphone-status');
+const languageStatus = document.querySelector('#language-status');
+const languageSwitch = document.querySelector('#language-switch');
+const languageButtons = [...languageSwitch.querySelectorAll('[data-language]')];
 const accessToken = new URLSearchParams(location.search).get('token');
 let socket;
 let assistantBubble = null;
@@ -20,15 +23,27 @@ let playbackCursor = 0;
 let playbackEndTimer = null;
 let playbackSequence = -1;
 let playbackPrebufferSeconds = 0.12;
+let currentLanguage = 'vi';
+let currentState = 'IDLE';
+let languageLoading = false;
 const playbackSources = new Set();
 const playbackStarted = new Set();
 
 const stateLabels = {
-  IDLE: ['Sẵn sàng', 'Hãy nói vào microphone.'],
-  LISTENING: ['Đang nghe', 'Tiếp tục nói, tôi đang lắng nghe.'],
-  PROCESSING: ['Đang suy nghĩ', 'Nhận dạng và tạo phản hồi.'],
-  SPEAKING: ['Đang trả lời', 'Bạn có thể nói để ngắt.'],
-  INTERRUPTED: ['Đã ngắt', 'Đang chuyển sang lượt mới.'],
+  vi: {
+    IDLE: ['Sẵn sàng', 'Hãy nói vào microphone.'],
+    LISTENING: ['Đang nghe', 'Tiếp tục nói, tôi đang lắng nghe.'],
+    PROCESSING: ['Đang suy nghĩ', 'Nhận dạng và tạo phản hồi.'],
+    SPEAKING: ['Đang trả lời', 'Bạn có thể nói để ngắt.'],
+    INTERRUPTED: ['Đã ngắt', 'Đang chuyển sang lượt mới.'],
+  },
+  en: {
+    IDLE: ['Ready', 'Speak into your microphone.'],
+    LISTENING: ['Listening', 'Keep speaking, I am listening.'],
+    PROCESSING: ['Thinking', 'Transcribing and preparing a response.'],
+    SPEAKING: ['Speaking', 'Say “stop” to interrupt.'],
+    INTERRUPTED: ['Interrupted', 'Ready for a new turn.'],
+  },
 };
 
 function connect() {
@@ -50,12 +65,17 @@ function connect() {
 }
 
 function setConnection(online) {
-  connection.textContent = online ? 'Đã kết nối' : 'Mất kết nối';
+  connection.textContent = online
+    ? (currentLanguage === 'en' ? 'Connected' : 'Đã kết nối')
+    : (currentLanguage === 'en' ? 'Disconnected' : 'Mất kết nối');
   connectionDot.classList.toggle('online', online);
+  for (const button of languageButtons) button.disabled = !online || languageLoading;
+  if (!online) micButton.disabled = true;
 }
 
 function handleEvent(event) {
   if (event.type === 'hello' || event.type === 'ready') {
+    if (event.language) setActiveLanguage(event.language);
     document.querySelector('#backend').textContent = event.backend;
     document.querySelector('#model').textContent = event.model;
     if (event.models) renderModels(event.models);
@@ -64,6 +84,18 @@ function handleEvent(event) {
       configureBrowserAudio(event.audio_mode === 'browser');
       playbackPrebufferSeconds = Math.max(0, Number(event.playback_prebuffer_ms || 0)) / 1000;
     }
+  } else if (event.type === 'language_loading') {
+    stopMicrophone();
+    clearBrowserAudio();
+    setLanguageBusy(true, event.language);
+  } else if (event.type === 'language_changed') {
+    setActiveLanguage(event.language);
+    setLanguageBusy(false);
+    if (event.models) renderModels(event.models);
+  } else if (event.type === 'language_error') {
+    setLanguageBusy(false);
+    languageStatus.textContent = event.message;
+    appendLog(`Language switch error: ${event.message}`, 'error');
   } else if (event.type === 'state') {
     setState(event.state);
   } else if (event.type === 'transcript') {
@@ -87,6 +119,8 @@ function handleEvent(event) {
   } else if (event.type === 'history_cleared') {
     conversation.innerHTML = emptyMarkup();
     assistantBubble = null;
+  } else if (event.type === 'protocol_error') {
+    appendLog(`Protocol error: ${event.message}`, 'error');
   } else if (event.type === 'fatal') {
     setState('ERROR');
     hintEl.textContent = event.message;
@@ -97,10 +131,14 @@ function handleEvent(event) {
 
 function configureBrowserAudio(enabled) {
   browserAudioEnabled = enabled;
-  micButton.disabled = !enabled;
+  micButton.disabled = !enabled || languageLoading;
   micStatus.textContent = enabled
-    ? 'Microphone và loa dùng trên trình duyệt này.'
-    : 'Server không hỗ trợ browser audio.';
+    ? (currentLanguage === 'en'
+      ? 'Microphone and speaker use this browser.'
+      : 'Microphone và loa dùng trên trình duyệt này.')
+    : (currentLanguage === 'en'
+      ? 'Browser audio is unavailable.'
+      : 'Server không hỗ trợ browser audio.');
 }
 
 async function startMicrophone() {
@@ -140,9 +178,11 @@ async function startMicrophone() {
         sampleRate: settings.sampleRate ?? captureContext.sampleRate,
       },
     });
-    micButton.textContent = 'Tắt microphone';
+    micButton.textContent = currentLanguage === 'en' ? 'Disable microphone' : 'Tắt microphone';
     micButton.classList.add('active');
-    micStatus.textContent = 'Đang dùng microphone và loa của trình duyệt.';
+    micStatus.textContent = currentLanguage === 'en'
+      ? 'Using this browser microphone and speaker.'
+      : 'Đang dùng microphone và loa của trình duyệt.';
   } catch (error) {
     stopMicrophone();
     micStatus.textContent = `Không mở được microphone: ${error.message}`;
@@ -157,9 +197,13 @@ function stopMicrophone() {
   microphoneStream = null;
   captureContext?.close();
   captureContext = null;
-  micButton.textContent = 'Bật microphone';
+  micButton.textContent = currentLanguage === 'en' ? 'Enable microphone' : 'Bật microphone';
   micButton.classList.remove('active');
-  if (browserAudioEnabled) micStatus.textContent = 'Microphone đang tắt.';
+  if (browserAudioEnabled) {
+    micStatus.textContent = currentLanguage === 'en'
+      ? 'Microphone is off.'
+      : 'Microphone đang tắt.';
+  }
 }
 
 async function ensurePlaybackContext() {
@@ -281,7 +325,9 @@ function renderModels(models) {
 }
 
 function setState(state) {
-  const [label, hint] = stateLabels[state] || [state, 'Kiểm tra nhật ký hệ thống.'];
+  currentState = state;
+  const labels = stateLabels[currentLanguage] || stateLabels.vi;
+  const [label, hint] = labels[state] || [state, 'Check the system log.'];
   stateEl.textContent = label;
   hintEl.textContent = hint;
   orb.className = `orb ${state.toLowerCase()}`;
@@ -291,7 +337,9 @@ function addMessage(role, text) {
   document.querySelector('#empty')?.remove();
   const item = document.createElement('article');
   item.className = `message ${role}`;
-  const roleLabel = role === 'user' ? 'Bạn' : 'Trợ lý';
+  const roleLabel = role === 'user'
+    ? (currentLanguage === 'en' ? 'You' : 'Bạn')
+    : (currentLanguage === 'en' ? 'Assistant' : 'Trợ lý');
   item.innerHTML = `<span>${roleLabel}</span><p class="message-text"></p>`;
   item.querySelector('.message-text').textContent = text;
   conversation.appendChild(item);
@@ -312,7 +360,42 @@ function appendLog(message, level = 'info') {
 }
 
 function emptyMarkup() {
+  if (currentLanguage === 'en') {
+    return `<div id="empty" class="empty"><span class="wave">||||||||</span><p>Enable the microphone and speak.</p><small>Audio is captured and played in this browser.</small></div>`;
+  }
   return `<div id="empty" class="empty"><span class="wave">||||||||</span><p>Hãy bật microphone và nói.</p><small>Âm thanh được thu và phát trên trình duyệt này.</small></div>`;
+}
+
+function setActiveLanguage(language) {
+  currentLanguage = language === 'en' ? 'en' : 'vi';
+  document.documentElement.lang = currentLanguage;
+  for (const button of languageButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.language === currentLanguage));
+  }
+  languageStatus.textContent = currentLanguage === 'en'
+    ? 'English models are active.'
+    : 'Các model tiếng Việt đang hoạt động.';
+  document.querySelector('#interrupt').textContent = currentLanguage === 'en'
+    ? 'Stop response'
+    : 'Ngắt phản hồi';
+  document.querySelector('#clear').textContent = currentLanguage === 'en'
+    ? 'Clear conversation'
+    : 'Xóa hội thoại';
+  micButton.textContent = captureContext
+    ? (currentLanguage === 'en' ? 'Disable microphone' : 'Tắt microphone')
+    : (currentLanguage === 'en' ? 'Enable microphone' : 'Bật microphone');
+  setState(currentState);
+}
+
+function setLanguageBusy(busy, targetLanguage = currentLanguage) {
+  languageLoading = busy;
+  languageSwitch.setAttribute('aria-busy', String(busy));
+  for (const button of languageButtons) button.disabled = busy;
+  micButton.disabled = !browserAudioEnabled || busy;
+  if (busy) {
+    const target = targetLanguage === 'en' ? 'English' : 'Tiếng Việt';
+    languageStatus.textContent = `Loading ${target} models…`;
+  }
 }
 
 micButton.addEventListener('click', () => {
@@ -325,6 +408,16 @@ document.querySelector('#interrupt').addEventListener('click', () => {
 document.querySelector('#clear').addEventListener('click', () => {
   sendAction('clear_history');
 });
+for (const button of languageButtons) {
+  button.addEventListener('click', () => {
+    const language = button.dataset.language;
+    if (languageLoading || language === currentLanguage) return;
+    stopMicrophone();
+    clearBrowserAudio();
+    setLanguageBusy(true, language);
+    sendAction('set_language', { language });
+  });
+}
 
 if (accessToken) {
   document.querySelector('#models-api').href = `/api/models?token=${encodeURIComponent(accessToken)}`;

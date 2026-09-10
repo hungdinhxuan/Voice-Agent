@@ -14,6 +14,11 @@ def test_loads_repository_config() -> None:
     assert config.audio.allow_barge_in
     assert "dừng lại" in config.audio.interrupt_phrases
     assert config.runtime.max_concurrent_asr == 1
+    assert config.web.default_language == "vi"
+    assert config.web.max_sessions == 4
+    assert config.english.asr.model == "nvidia/parakeet-tdt-0.6b-v3"
+    assert config.english.tts.model == "hexgrad/Kokoro-82M"
+    assert config.for_language("en").audio.output_sample_rate == 24000
 
 
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
@@ -52,3 +57,10 @@ def test_lan_web_accepts_complete_security_config(tmp_path: Path) -> None:
     config = AppConfig.load(path)
 
     assert config.web.host == "0.0.0.0"
+
+
+def test_rejects_non_positive_max_sessions(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("web:\n  max_sessions: 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_sessions"):
+        AppConfig.load(path)

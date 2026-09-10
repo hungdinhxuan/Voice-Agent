@@ -25,14 +25,18 @@ class ParakeetCTCService(ASRService):
         from huggingface_hub import hf_hub_download
         from nemo.collections.asr.models import ASRModel
 
-        checkpoint = hf_hub_download(
-            repo_id=self.config.model,
-            filename=self.config.checkpoint_file,
-        )
-        self.model = ASRModel.restore_from(
-            restore_path=Path(checkpoint),
-            map_location=torch.device(self.config.device),
-        )
+        if self.config.checkpoint_file:
+            checkpoint = hf_hub_download(
+                repo_id=self.config.model,
+                filename=self.config.checkpoint_file,
+            )
+            self.model = ASRModel.restore_from(
+                restore_path=Path(checkpoint),
+                map_location=torch.device(self.config.device),
+            )
+        else:
+            self.model = ASRModel.from_pretrained(model_name=self.config.model)
+            self.model = self.model.to(torch.device(self.config.device))
         self.model.eval()
 
     async def transcribe(
@@ -42,7 +46,7 @@ class ParakeetCTCService(ASRService):
         cancellation: TurnCancellation | None = None,
     ) -> str:
         if sample_rate != 16000:
-            raise ValueError("Parakeet CTC cần audio 16 kHz.")
+            raise ValueError("Parakeet cần audio 16 kHz.")
         if self.model is None:
             raise RuntimeError("ASR chưa được load.")
         if cancellation:

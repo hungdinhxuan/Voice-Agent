@@ -20,3 +20,9 @@ def test_prepare_for_speech_removes_markup_and_pronounceable_symbols(
     spoken: str,
 ) -> None:
     assert prepare_for_speech(raw) == spoken
+
+
+def test_prepare_for_speech_uses_english_symbols_without_vietnamese_expansion() -> None:
+    assert prepare_for_speech(
+        "GPU costs $100 & see https://example.com", language="en"
+    ) == "GPU costs 100 and see link"

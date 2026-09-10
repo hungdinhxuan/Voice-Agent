@@ -20,7 +20,8 @@ def build_model_catalog(config: AppConfig) -> dict[str, dict[str, Any]]:
         "audio_input": f"{config.audio.sample_rate} Hz mono",
     }
     if config.asr.backend == "parakeet":
-        asr["checkpoint"] = config.asr.checkpoint_file
+        if config.asr.checkpoint_file:
+            asr["checkpoint"] = config.asr.checkpoint_file
     else:
         asr["dtype"] = config.asr.dtype
         asr["max_new_tokens"] = config.asr.max_new_tokens
@@ -46,12 +47,14 @@ def build_model_catalog(config: AppConfig) -> dict[str, dict[str, Any]]:
         llm["runtime"] = "Transformers"
         llm["runtime_version"] = _package_version("transformers")
 
+    tts_package = "vieneu" if config.tts.provider == "vieneu" else "kokoro"
     tts = {
         "role": "Tổng hợp giọng nói",
-        "model": "VieNeu-TTS v3 Turbo",
+        "model": config.tts.model,
+        "provider": config.tts.provider,
         "backend": config.tts.backend,
-        "runtime": "vieneu",
-        "runtime_version": _package_version("vieneu"),
+        "runtime": tts_package,
+        "runtime_version": _package_version(tts_package),
         "device": config.tts.device,
         "precision": config.tts.precision,
         "voice": config.tts.voice or "preset mặc định",
@@ -70,6 +73,13 @@ def build_model_catalog(config: AppConfig) -> dict[str, dict[str, Any]]:
         "speech_pad_ms": config.vad.speech_pad_ms,
     }
     return {"asr": asr, "llm": llm, "tts": tts, "vad": vad}
+
+
+def build_language_catalogs(config: AppConfig) -> dict[str, dict[str, dict[str, Any]]]:
+    return {
+        language: build_model_catalog(config.for_language(language))
+        for language in ("vi", "en")
+    }
 
 
 def _package_version(package: str) -> str:

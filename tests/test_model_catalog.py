@@ -1,5 +1,5 @@
 from app.config import AppConfig
-from app.web.model_catalog import build_model_catalog
+from app.web.model_catalog import build_language_catalogs, build_model_catalog
 
 
 def test_catalog_exposes_every_active_pipeline_model() -> None:
@@ -21,3 +21,14 @@ def test_catalog_omits_qwen_only_fields_for_parakeet() -> None:
 
     assert "max_new_tokens" not in asr
     assert "dtype" not in asr
+
+
+def test_catalog_exposes_english_pipeline() -> None:
+    catalogs = build_language_catalogs(AppConfig.load("config.yaml"))
+
+    assert catalogs["en"]["asr"]["model"] == "nvidia/parakeet-tdt-0.6b-v3"
+    assert "checkpoint" not in catalogs["en"]["asr"]
+    assert "max_new_tokens" not in catalogs["en"]["asr"]
+    assert catalogs["en"]["tts"]["model"] == "hexgrad/Kokoro-82M"
+    assert catalogs["en"]["tts"]["provider"] == "kokoro"
+    assert catalogs["en"]["tts"]["audio_output"] == "24000 Hz mono"

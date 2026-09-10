@@ -1,7 +1,7 @@
 [project]
 name = "local-vietnamese-voice-agent"
 version = "0.1.0"
-description = "Fully local real-time Vietnamese voice conversation agent"
+description = "Fully local real-time Vietnamese and English voice conversation agent"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "braceexpand>=0.1.7,<0.2",
     "datasets>=5,<6",
     "editdistance>=0.8,<1",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "einops>=0.8,<1",
     "fastapi>=0.141,<0.142",
     "fiddle>=0.3,<0.4",
@@ -17,6 +18,7 @@ dependencies = [
     "ipython>=9.17,<10",
     "jiwer>=3.1,<4",
     "kaldialign>=0.12,<0.13",
+    "kokoro>=0.9.4,<0.10",
     "lhotse>=1.31,<2",
     "lightning==2.4.0",
     "nemo-toolkit==2.6.0",

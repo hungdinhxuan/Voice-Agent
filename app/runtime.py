@@ -15,7 +15,7 @@ from app.cancellation import TurnCancellation
 from app.llm.base import LLMService
 from app.llm.factory import create_llm_service
 from app.tts.base import TTSService
-from app.tts.vieneu import VieNeuTTSService
+from app.tts.factory import create_tts_service
 
 
 class ModelRuntime:
@@ -28,13 +28,30 @@ class ModelRuntime:
         asr: ASRService | None = None,
         llm: LLMService | None = None,
         tts: TTSService | None = None,
+        english_asr: ASRService | None = None,
+        english_tts: TTSService | None = None,
     ) -> None:
         self.config = config
-        self.asr = asr or create_asr_service(config.asr)
+        self.default_language = config.web.default_language
+        self._configs = {
+            "vi": config.for_language("vi"),
+            "en": config.for_language("en"),
+        }
+        self._asr = {
+            "vi": asr or create_asr_service(self._configs["vi"].asr),
+            "en": english_asr or create_asr_service(self._configs["en"].asr),
+        }
+        self._tts = {
+            "vi": tts or create_tts_service(self._configs["vi"].tts),
+            "en": english_tts or create_tts_service(self._configs["en"].tts),
+        }
+        self.asr = self._asr[self.default_language]
         self.llm = llm or create_llm_service(config.llm)
-        self.tts = tts or VieNeuTTSService(config.tts)
+        self.tts = self._tts[self.default_language]
         self._lock = asyncio.Lock()
-        self._loaded = False
+        self._llm_loaded = False
+        self._loaded_languages: set[str] = set()
+        self._language_loaded_at: dict[str, float] = {}
         self._loaded_at: float | None = None
         self._gates = {
             "asr": InferenceGate(config.runtime.max_concurrent_asr),
@@ -44,44 +61,78 @@ class ModelRuntime:
 
     @property
     def loaded(self) -> bool:
-        return self._loaded
+        return self._llm_loaded and self.default_language in self._loaded_languages
 
     async def load(self) -> None:
+        await self.load_language(self.default_language)
+
+    async def load_language(self, language: str) -> None:
+        code = self._normalize_language(language)
         async with self._lock:
-            if self._loaded:
+            if code in self._loaded_languages and self._llm_loaded:
                 return
+            llm_loaded_here = False
             try:
-                await self.asr.load()
-                await self.llm.load()
-                await self.tts.load()
+                if not self._llm_loaded:
+                    await self.llm.load()
+                    self._llm_loaded = True
+                    llm_loaded_here = True
+                await self._asr[code].load()
+                await self._tts[code].load()
             except BaseException:
                 await asyncio.gather(
-                    self.tts.close(),
-                    self.llm.close(),
-                    self.asr.close(),
+                    self._tts[code].close(),
+                    self._asr[code].close(),
                     return_exceptions=True,
                 )
+                if llm_loaded_here:
+                    await self.llm.close()
+                    self._llm_loaded = False
                 raise
-            self._loaded = True
-            self._loaded_at = time.time()
+            loaded_at = time.time()
+            self._loaded_languages.add(code)
+            self._language_loaded_at[code] = loaded_at
+            if self._loaded_at is None:
+                self._loaded_at = loaded_at
 
     async def close(self) -> None:
         async with self._lock:
-            if not self._loaded:
+            if not self._llm_loaded and not self._loaded_languages:
                 return
-            await asyncio.gather(self.tts.close(), self.llm.close(), self.asr.close())
-            self._loaded = False
+            services = [
+                service
+                for code in self._loaded_languages
+                for service in (self._tts[code], self._asr[code])
+            ]
+            if self._llm_loaded:
+                services.append(self.llm)
+            await asyncio.gather(*(service.close() for service in services))
+            self._loaded_languages.clear()
+            self._language_loaded_at.clear()
+            self._llm_loaded = False
+            self._loaded_at = None
+
+    def is_language_loaded(self, language: str) -> bool:
+        return self._normalize_language(language) in self._loaded_languages
+
+    def asr_for(self, language: str) -> ASRService:
+        return self._asr[self._normalize_language(language)]
+
+    def tts_for(self, language: str) -> TTSService:
+        return self._tts[self._normalize_language(language)]
 
     async def transcribe(
         self,
         audio: np.ndarray,
         sample_rate: int,
         cancellation: TurnCancellation | None = None,
+        language: str | None = None,
     ) -> str:
+        code = self._normalize_language(language or self.default_language)
         async with self._gates["asr"].slot():
             if cancellation:
                 cancellation.raise_if_cancelled()
-            return await self.asr.transcribe(audio, sample_rate, cancellation)
+            return await self._asr[code].transcribe(audio, sample_rate, cancellation)
 
     async def generate_stream(
         self,
@@ -97,21 +148,39 @@ class ModelRuntime:
         self,
         text: str,
         cancellation: TurnCancellation,
+        language: str | None = None,
     ) -> AsyncIterator[np.ndarray]:
+        code = self._normalize_language(language or self.default_language)
         async with self._gates["tts"].slot():
             cancellation.raise_if_cancelled()
-            async for audio in self.tts.synthesize_stream(text, cancellation):
+            async for audio in self._tts[code].synthesize_stream(text, cancellation):
                 yield audio
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "loaded": self._loaded,
+            "loaded": self.loaded,
             "loaded_at": self._loaded_at,
-            "asr": self.config.asr.model,
+            "default_language": self.default_language,
+            "asr": self._configs[self.default_language].asr.model,
             "llm": self.config.llm.model,
-            "tts": "VieNeu-TTS",
+            "tts": self._configs[self.default_language].tts.model,
+            "languages": {
+                code: {
+                    "loaded": code in self._loaded_languages,
+                    "loaded_at": self._language_loaded_at.get(code),
+                    "asr": profile.asr.model,
+                    "tts": profile.tts.model,
+                }
+                for code, profile in self._configs.items()
+            },
             "inference": {name: gate.snapshot() for name, gate in self._gates.items()},
         }
+
+    def _normalize_language(self, language: str) -> str:
+        code = language.casefold()
+        if code not in self._configs:
+            raise ValueError(f"Ngôn ngữ không được hỗ trợ: {language}")
+        return code
 
 
 class InferenceGate:

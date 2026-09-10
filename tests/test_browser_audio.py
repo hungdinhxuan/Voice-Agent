@@ -46,3 +46,33 @@ async def test_browser_output_clear_cancels_client_playback() -> None:
     await output.clear()
 
     assert events[-1] == {"type": "audio_clear", "turn_id": 3}
+
+
+@pytest.mark.asyncio
+async def test_browser_output_gives_up_when_client_never_acknowledges() -> None:
+    events: list[dict[str, object]] = []
+    output = BrowserAudioOutput(AudioConfig(), events.append, ack_grace=0.01)
+    output.begin_turn(11)
+    await output.enqueue(11, np.ones(480, dtype=np.float32))
+
+    await output.wait_first_played(11)
+    await output.wait_drained(11)
+
+    warnings = [event["message"] for event in events if event["type"] == "log"]
+    assert any("audio_started" in message for message in warnings)
+    assert any("audio_drained" in message for message in warnings)
+
+
+@pytest.mark.asyncio
+async def test_browser_output_waits_even_when_audio_is_not_queued_yet() -> None:
+    events: list[dict[str, object]] = []
+    output = BrowserAudioOutput(AudioConfig(), events.append, ack_grace=5.0)
+    output.begin_turn(5)
+
+    first_played = asyncio.create_task(output.wait_first_played(5))
+    await asyncio.sleep(0)
+    assert not first_played.done()
+
+    await output.enqueue(5, np.ones(3, dtype=np.float32))
+    output.mark_started(5)
+    await first_played
