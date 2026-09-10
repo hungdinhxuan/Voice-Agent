@@ -139,11 +139,13 @@ Chạy web dashboard:
 uv run python main.py --web
 ```
 
-Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Tab kết nối đầu tiên giữ quyền audio; các tab sau chỉ xem dashboard. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
+Mở <http://127.0.0.1:8080>, bấm **Bật microphone** và cấp quyền audio. Chế độ `--web` thu microphone bằng `getUserMedia`, gửi PCM 16 kHz qua WebSocket và phát TTS bằng Web Audio ngay trên trình duyệt. Mọi client đều có thể bật mic và cùng tham gia một phiên hội thoại; router chọn client đang nói để không trộn các luồng audio im lặng. Chế độ CLI không `--web` vẫn dùng microphone/loa trực tiếp trên máy host.
 
 Dashboard hiển thị metadata của toàn bộ pipeline: ASR, LLM, TTS và VAD. API JSON tương ứng được expose tại `GET /api/models`; trạng thái tiến trình nằm tại `GET /health`. Cả hai chỉ bind vào loopback theo `web.host` mặc định.
 
 Khi agent đang nói, browser vẫn thu để nhận lệnh ngắt. Chỉ câu khớp `audio.interrupt_phrases` như `dừng`, `dừng lại`, `ngừng`, `thôi` mới hủy LLM và playback; câu khác bị bỏ qua. Nút **Ngắt phản hồi** vẫn dừng ngay lập tức.
+
+Trước khi gọi TTS, ứng dụng bỏ dấu quote, Markdown, ngoặc, emoji và ký hiệu không có ích cho phát âm; `...` được đổi thành dấu chấm. Transcript và câu trả lời hiển thị trên UI vẫn giữ nguyên nội dung model.
 
 ## Cấu hình chính
 

@@ -5,7 +5,22 @@ import numpy as np
 import pytest
 
 from app.config import AudioConfig
-from app.web.audio import BrowserAudioOutput
+from app.web.audio import BrowserAudioInputRouter, BrowserAudioOutput
+
+
+def test_browser_input_router_avoids_mixing_client_streams() -> None:
+    received: list[np.ndarray] = []
+    router = BrowserAudioInputRouter(received.append)
+    client_one = object()
+    client_two = object()
+    speech = np.full(512, 0.1, dtype=np.float32)
+
+    assert router.feed(client_one, speech)
+    assert not router.feed(client_two, speech)
+    router.release()
+    assert router.feed(client_two, speech)
+
+    assert len(received) == 2
 
 
 @pytest.mark.asyncio

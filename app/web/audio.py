@@ -11,6 +11,48 @@ from app.config import AudioConfig
 
 
 EventHandler = Callable[[dict[str, Any]], None]
+AudioSink = Callable[[np.ndarray], None]
+
+
+class BrowserAudioInputRouter:
+    """Selects one currently-speaking browser without mixing silent client streams."""
+
+    def __init__(
+        self,
+        sink: AudioSink,
+        *,
+        activation_rms: float = 0.008,
+        release_silence_frames: int = 48,
+    ) -> None:
+        self._sink = sink
+        self._activation_rms = activation_rms
+        self._release_silence_frames = release_silence_frames
+        self._active_client: object | None = None
+        self._silent_frames = 0
+
+    def feed(self, client: object, frame: np.ndarray) -> bool:
+        audio = np.asarray(frame, dtype=np.float32).reshape(-1)
+        rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        if self._active_client is None:
+            if rms < self._activation_rms:
+                return False
+            self._active_client = client
+        if client is not self._active_client:
+            return False
+
+        self._sink(audio)
+        self._silent_frames = self._silent_frames + 1 if rms < self._activation_rms else 0
+        if self._silent_frames >= self._release_silence_frames:
+            self.release()
+        return True
+
+    def release(self) -> None:
+        self._active_client = None
+        self._silent_frames = 0
+
+    def disconnect(self, client: object) -> None:
+        if client is self._active_client:
+            self.release()
 
 
 class BrowserAudioOutput:

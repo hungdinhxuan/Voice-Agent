@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import AppConfig
 from app.orchestrator import VoiceOrchestrator
-from app.web.audio import BrowserAudioOutput
+from app.web.audio import BrowserAudioInputRouter, BrowserAudioOutput
 from app.web.events import EventBroker
 from app.web.model_catalog import build_model_catalog
 
@@ -24,11 +24,16 @@ STATIC_DIR = Path(__file__).with_name("static")
 
 def create_web_app(config: AppConfig) -> FastAPI:
     broker = EventBroker()
-    audio_owner: WebSocket | None = None
+    audio_clients: set[WebSocket] = set()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        input_router: BrowserAudioInputRouter | None = None
+
         def publish(event: dict[str, Any]) -> None:
+            if event.get("type") == "metric" and event.get("name") == "utterance":
+                if input_router is not None:
+                    input_router.release()
             if event.get("type") == "ready":
                 event = {**event, "models": build_model_catalog(config)}
             broker.publish(event)
@@ -42,6 +47,8 @@ def create_web_app(config: AppConfig) -> FastAPI:
         )
         app.state.orchestrator = orchestrator
         app.state.browser_speaker = browser_speaker
+        input_router = BrowserAudioInputRouter(orchestrator.feed_audio)
+        app.state.input_router = input_router
         app.state.broker = broker
         task = asyncio.create_task(orchestrator.run(), name="voice-orchestrator")
 
@@ -86,11 +93,8 @@ def create_web_app(config: AppConfig) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
-        nonlocal audio_owner
         await websocket.accept()
-        owns_audio = audio_owner is None
-        if owns_audio:
-            audio_owner = websocket
+        audio_clients.add(websocket)
         queue = broker.subscribe()
         await websocket.send_json(
             {
@@ -101,7 +105,6 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 "asr_model": config.asr.model,
                 "models": build_model_catalog(config),
                 "state": app.state.orchestrator.state.state.value,
-                "audio_owner": owns_audio,
                 "audio_mode": "browser",
             }
         )
@@ -111,7 +114,7 @@ def create_web_app(config: AppConfig) -> FastAPI:
                 websocket,
                 app.state.orchestrator,
                 app.state.browser_speaker,
-                owns_audio=owns_audio,
+                app.state.input_router,
                 frame_samples=config.audio.block_size,
             )
         )
@@ -125,8 +128,9 @@ def create_web_app(config: AppConfig) -> FastAPI:
             await asyncio.gather(*done, *pending, return_exceptions=True)
         finally:
             broker.unsubscribe(queue)
-            if owns_audio and audio_owner is websocket:
-                audio_owner = None
+            audio_clients.discard(websocket)
+            app.state.input_router.disconnect(websocket)
+            if not audio_clients:
                 await app.state.orchestrator.disconnect_audio_client()
 
     return app
@@ -144,8 +148,8 @@ async def _receive_actions(
     websocket: WebSocket,
     orchestrator: VoiceOrchestrator,
     browser_speaker: BrowserAudioOutput,
+    input_router: BrowserAudioInputRouter,
     *,
-    owns_audio: bool,
     frame_samples: int,
 ) -> None:
     try:
@@ -155,8 +159,7 @@ async def _receive_actions(
                 return
             payload = packet.get("bytes")
             if payload is not None:
-                if owns_audio:
-                    orchestrator.feed_audio(decode_browser_audio(payload, frame_samples))
+                input_router.feed(websocket, decode_browser_audio(payload, frame_samples))
                 continue
             raw_message = packet.get("text")
             if raw_message is None:
@@ -167,9 +170,9 @@ async def _receive_actions(
                 await orchestrator.interrupt()
             elif action == "clear_history":
                 orchestrator.clear_history()
-            elif owns_audio and action == "audio_started":
+            elif action == "audio_started":
                 browser_speaker.mark_started(int(message["turn_id"]))
-            elif owns_audio and action == "audio_drained":
+            elif action == "audio_drained":
                 browser_speaker.mark_drained(int(message["turn_id"]))
     except WebSocketDisconnect:
         return

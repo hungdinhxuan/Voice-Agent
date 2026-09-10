@@ -71,36 +71,44 @@ def test_browser_audio_frame_decodes_float32_pcm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_websocket_routes_browser_pcm_and_playback_ack() -> None:
+async def test_websocket_routes_pcm_from_every_client() -> None:
     frame = np.linspace(-1, 1, 512, dtype="<f4")
-    packets = iter(
-        [
-            {"type": "websocket.receive", "bytes": frame.tobytes()},
-            {
-                "type": "websocket.receive",
-                "text": json.dumps({"action": "audio_started", "turn_id": 4}),
-            },
-            {
-                "type": "websocket.receive",
-                "text": json.dumps({"action": "audio_drained", "turn_id": 4}),
-            },
-            {"type": "websocket.disconnect"},
-        ]
-    )
-    websocket = Mock()
-    websocket.receive = AsyncMock(side_effect=lambda: next(packets))
     orchestrator = Mock()
     orchestrator.interrupt = AsyncMock()
     speaker = Mock()
+    input_router = Mock()
+    clients = []
 
-    await _receive_actions(
-        websocket,
-        orchestrator,
-        speaker,
-        owns_audio=True,
-        frame_samples=512,
-    )
+    for _ in range(2):
+        packets = iter(
+            [
+                {"type": "websocket.receive", "bytes": frame.tobytes()},
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps({"action": "audio_started", "turn_id": 4}),
+                },
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps({"action": "audio_drained", "turn_id": 4}),
+                },
+                {"type": "websocket.disconnect"},
+            ]
+        )
+        websocket = Mock()
+        websocket.receive = AsyncMock(side_effect=lambda: next(packets))
+        clients.append(websocket)
 
-    np.testing.assert_array_equal(orchestrator.feed_audio.call_args.args[0], frame)
-    speaker.mark_started.assert_called_once_with(4)
-    speaker.mark_drained.assert_called_once_with(4)
+        await _receive_actions(
+            websocket,
+            orchestrator,
+            speaker,
+            input_router,
+            frame_samples=512,
+        )
+
+    assert input_router.feed.call_count == 2
+    assert [call.args[0] for call in input_router.feed.call_args_list] == clients
+    for call in input_router.feed.call_args_list:
+        np.testing.assert_array_equal(call.args[1], frame)
+    assert speaker.mark_started.call_count == 2
+    assert speaker.mark_drained.call_count == 2

@@ -9,7 +9,7 @@ const micButton = document.querySelector('#microphone');
 const micStatus = document.querySelector('#microphone-status');
 let socket;
 let assistantBubble = null;
-let ownsAudio = false;
+let browserAudioEnabled = false;
 let microphoneStream = null;
 let captureContext = null;
 let captureNode = null;
@@ -52,7 +52,7 @@ function handleEvent(event) {
     document.querySelector('#model').textContent = event.model;
     if (event.models) renderModels(event.models);
     if (event.state) setState(event.state);
-    if (event.type === 'hello') configureAudioOwner(event.audio_owner);
+    if (event.type === 'hello') configureBrowserAudio(event.audio_mode === 'browser');
   } else if (event.type === 'state') {
     setState(event.state);
   } else if (event.type === 'transcript') {
@@ -64,11 +64,11 @@ function handleEvent(event) {
     scrollConversation();
   } else if (event.type === 'assistant_done') {
     assistantBubble = null;
-  } else if (event.type === 'audio_chunk' && ownsAudio) {
+  } else if (event.type === 'audio_chunk' && browserAudioEnabled) {
     playAudioChunk(event);
-  } else if (event.type === 'audio_end' && ownsAudio) {
+  } else if (event.type === 'audio_end' && browserAudioEnabled) {
     finishAudioTurn(event.turn_id);
-  } else if (event.type === 'audio_clear' && ownsAudio) {
+  } else if (event.type === 'audio_clear' && browserAudioEnabled) {
     clearBrowserAudio();
   } else if (event.type === 'metric') {
     const target = document.querySelector(`#metric-${event.name}`);
@@ -84,16 +84,16 @@ function handleEvent(event) {
   if (event.type === 'log') appendLog(event.message, event.level);
 }
 
-function configureAudioOwner(isOwner) {
-  ownsAudio = isOwner === true;
-  micButton.disabled = !ownsAudio;
-  micStatus.textContent = ownsAudio
+function configureBrowserAudio(enabled) {
+  browserAudioEnabled = enabled;
+  micButton.disabled = !enabled;
+  micStatus.textContent = enabled
     ? 'Microphone và loa dùng trên trình duyệt này.'
-    : 'Tab khác đang giữ quyền audio.';
+    : 'Server không hỗ trợ browser audio.';
 }
 
 async function startMicrophone() {
-  if (!ownsAudio || captureContext) return;
+  if (!browserAudioEnabled || captureContext) return;
   try {
     microphoneStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -139,7 +139,7 @@ function stopMicrophone() {
   captureContext = null;
   micButton.textContent = 'Bật microphone';
   micButton.classList.remove('active');
-  if (ownsAudio) micStatus.textContent = 'Microphone đang tắt.';
+  if (browserAudioEnabled) micStatus.textContent = 'Microphone đang tắt.';
 }
 
 async function ensurePlaybackContext() {

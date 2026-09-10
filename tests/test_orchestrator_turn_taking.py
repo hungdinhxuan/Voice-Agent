@@ -8,6 +8,7 @@ from app.cancellation import TurnCancellation
 from app.config import AppConfig
 from app.orchestrator import VoiceOrchestrator, _matches_interrupt_phrase
 from app.state import ConversationState
+from app.utils.timing import TurnTiming
 
 
 @pytest.mark.asyncio
@@ -73,6 +74,28 @@ async def test_non_stop_phrase_does_not_cancel_active_turn() -> None:
 @pytest.mark.parametrize("text", ["dừng", "DỪNG LẠI!", " ngừng lại. ", "Thôi!"])
 def test_interrupt_phrase_matching_ignores_case_spacing_and_punctuation(text: str) -> None:
     assert _matches_interrupt_phrase(text, AppConfig().audio.interrupt_phrases)
+
+
+@pytest.mark.asyncio
+async def test_tts_receives_speech_safe_text() -> None:
+    orchestrator = VoiceOrchestrator(AppConfig())
+    received: list[str] = []
+
+    async def synthesize(text: str, cancellation: TurnCancellation):
+        del cancellation
+        received.append(text)
+        if False:
+            yield np.empty(0, dtype=np.float32)
+
+    orchestrator.tts.synthesize_stream = synthesize
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    await queue.put('**"Xin chào..."** [bạn] # nhé!!!')
+    await queue.put(None)
+
+    await orchestrator._consume_tts(1, queue, TurnTiming(), TurnCancellation())
+
+    assert received == ["Xin chào. bạn nhé!"]
+    await orchestrator.llm.close()
 
 
 @pytest.mark.asyncio

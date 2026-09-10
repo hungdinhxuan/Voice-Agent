@@ -17,6 +17,7 @@ from app.cancellation import TurnCancellation
 from app.config import AppConfig
 from app.conversation.chunker import StreamingTextChunker
 from app.conversation.history import ConversationHistory
+from app.conversation.speech import prepare_for_speech
 from app.llm.factory import create_llm_service
 from app.state import ConversationState, StateMachine
 from app.tts.vieneu import VieNeuTTSService
@@ -335,6 +336,9 @@ class VoiceOrchestrator:
             text = await text_queue.get()
             if text is None:
                 return
+            text = prepare_for_speech(text)
+            if not text:
+                continue
             if timing.tts_started is None:
                 timing.tts_started = time.perf_counter()
             async for audio in self.tts.synthesize_stream(text, cancellation):
