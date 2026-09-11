@@ -12,8 +12,8 @@
 // ĐỌC TRƯỚC KHI NẠP
 //   1. Chân motor bên dưới lấy theo demo AlphaBot2-Ar của Waveshare. HÃY ĐỐI CHIẾU
 //      với schematic bo của bạn trước khi cấp nguồn động cơ.
-//   2. BT_RX/BT_TX mặc định D2/D3 chỉ là phỏng đoán. AlphaBot2 đã dùng nhiều chân
-//      cho cảm biến, hãy chọn hai chân còn trống trên bo của bạn.
+//   2. BT_RX/BT_TX đang để D10/D11. Hãy xác nhận hai chân này còn trống trên bo
+//      của bạn, AlphaBot2 đã dùng nhiều chân cho cảm biến.
 //   3. AlphaBot2 bản cơ bản KHÔNG có encoder, nên cm và độ được quy ra thời gian
 //      chạy. Phải hiệu chỉnh MS_PER_CM và MS_PER_DEGREE thì số mới đúng thực tế.
 //      Xem phần hiệu chỉnh trong docs/alphabot2_bridge.md.
@@ -32,6 +32,12 @@ const uint8_t PWMB = 5;   // tốc độ motor phải
 const uint8_t BT_RX = 10;  // nối tới TX của module
 const uint8_t BT_TX = 11;  // nối tới RX của module
 SoftwareSerial bt(BT_RX, BT_TX);
+
+// Đo thực tế trên AlphaBot2: motor phải đấu ngược cực so với motor trái, nên
+// cùng một giá trị dương lại làm hai bánh quay ngược chiều nhau. Đảo ở đây thay
+// vì đảo dây, và để ai có bo đấu khác chỉ cần sửa hai dòng này.
+const bool INVERT_LEFT  = false;
+const bool INVERT_RIGHT = true;
 
 // --- hiệu chỉnh: đo rồi sửa hai số này --------------------------------------
 const float MS_PER_CM = 22.0;      // thời gian chạy thẳng 1 cm, ở SPEED bên dưới
@@ -125,6 +131,8 @@ void handle(const char* command) {
 
 // left và right: âm là lùi, dương là tiến, |giá trị| là PWM.
 void drive(int left, int right) {
+  if (INVERT_LEFT) left = -left;
+  if (INVERT_RIGHT) right = -right;
   digitalWrite(AIN1, left < 0);
   digitalWrite(AIN2, left > 0);
   digitalWrite(BIN1, right > 0);

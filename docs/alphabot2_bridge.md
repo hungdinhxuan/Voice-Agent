@@ -27,6 +27,10 @@ thiết kế MCP của Xiaozhi: thiết bị là MCP server, backend là client.
 Nếu bạn đang có HC-05/HC-06 thì không có cách nào cứu từ phía trình duyệt — phải đổi
 sang module BLE. Đây là giới hạn của API, không phải của dự án này.
 
+**Chưa có module BLE nào vẫn chạy được**: console còn một đường **USB** qua Web Serial.
+Arduino cắm vào chính máy đang mở trang là dùng được, không cần thêm phần cứng. Đánh
+đổi là robot bị buộc vào sợi cáp — dùng để kiểm thử toàn tuyến trước khi mua module.
+
 Thêm hai điều kiện của Web Bluetooth:
 
 - Trang phải chạy trong **secure context**: `https://` hoặc `http://localhost`. Tunnel
@@ -126,9 +130,12 @@ hoặc đặt robot xuống sàn trước.
 
 1. Bật server có `xiaozhi.enabled: true`, mở **https://\<domain\>/xiaozhi** bằng
    Chrome hoặc Edge.
-2. Bấm **Kết nối robot (BLE)**, chọn module trong hộp thoại. Để `Profile UART` ở
-   *tự dò* — console thử Nordic UART rồi HM-10. Module lạ thì chọn *UUID tự nhập* và
-   điền `service,write`.
+2. Nối robot, chọn một trong hai:
+   - **BLE**: bấm *Kết nối robot (BLE)*, chọn module. Để `Profile UART` ở *tự dò* —
+     console thử Nordic UART rồi HM-10. Module lạ thì chọn *UUID tự nhập*.
+   - **USB**: bấm *hoặc qua USB*, chọn cổng COM của Arduino. Phải đóng Serial Monitor
+     trước, vì mỗi lúc chỉ một chương trình giữ được cổng. Đường này còn **đọc được
+     phản hồi** `ok F20` từ robot và hiện trong luồng message, điều mà BLE hiện chưa làm.
 3. Bấm thử `F20`, `L90`, `STOP` để chắc dây và hiệu chỉnh đã đúng. Mỗi lần bấm hiện
    một dòng `ble →robot` trong luồng message.
 4. Bấm **Kết nối** (WebSocket), rồi **listen start**, rồi **Bật microphone**.
@@ -159,9 +166,8 @@ nguy hiểm.
 - Sketch đã compile và nạp thật lên Arduino Uno, và bộ phân tích lệnh đã test qua USB
   (`P`, `S`, lệnh lạ, thiếu tham số đều đúng). **Chưa test phần chạy động cơ**, chưa
   test trên AlphaBot2 thật, và chưa test qua BLE.
-- Console gửi lệnh một chiều và không đọc phản hồi `ok`/`err` từ BLE về; nó chỉ báo
-  đã ghi xong. Muốn LLM biết robot bị kẹt thì phải subscribe characteristic notify —
-  chưa làm.
+- Đường **BLE** gửi một chiều, chưa đọc phản hồi `ok`/`err` về; muốn vậy phải subscribe
+  characteristic notify. Đường **USB** thì đọc được và hiện trong luồng message.
 - Một lệnh mỗi lần. Model gọi nhiều tool liên tiếp thì các lệnh nối đuôi nhau, robot
   không xếp hàng: lệnh sau ghi đè `stopAt` của lệnh trước.
 - Trình duyệt phải mở và ở gần robot trong tầm BLE (~10 m).

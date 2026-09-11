@@ -64,10 +64,13 @@
 
         <article class="card">
           <h2>3 · Robot qua Bluetooth</h2>
-          <p class="hint">Trình duyệt cầm luôn hai đầu: WebSocket ra server, BLE xuống robot.
-            Khi LLM gọi <code>tools/call</code>, lệnh được dịch thành một dòng lệnh gửi qua BLE.</p>
+          <p class="hint">Trình duyệt cầm luôn hai đầu: WebSocket ra server, và một đường xuống
+            robot. Khi LLM gọi <code>tools/call</code>, lệnh được dịch thành một dòng lệnh gửi
+            xuống. <b>BLE</b> cho robot ở xa máy; <b>USB</b> khi Arduino cắm vào chính máy này và
+            bạn chưa có module BLE.</p>
           <div class="buttons">
             <button id="ble" type="button">Kết nối robot (BLE)</button>
+            <button id="usb" type="button">hoặc qua USB</button>
             <span id="ble-state" class="ble-state">chưa kết nối</span>
           </div>
           <label class="row"><span>Profile UART</span>
