@@ -14,6 +14,7 @@ from app.config import AppConfig
 from app.cancellation import TurnCancellation
 from app.llm.base import LLMService
 from app.llm.factory import create_llm_service
+from app.tools import LLMDelta, ToolSpec
 from app.tts.base import TTSService
 from app.tts.factory import create_tts_service
 
@@ -134,6 +135,10 @@ class ModelRuntime:
                 cancellation.raise_if_cancelled()
             return await self._asr[code].transcribe(audio, sample_rate, cancellation)
 
+    @property
+    def supports_tools(self) -> bool:
+        return self.llm.supports_tools
+
     async def generate_stream(
         self,
         messages: list[dict[str, str]],
@@ -143,6 +148,17 @@ class ModelRuntime:
             cancellation.raise_if_cancelled()
             async for token in self.llm.generate_stream(messages, cancellation):
                 yield token
+
+    async def generate_turn(
+        self,
+        messages: list[dict],
+        cancellation: TurnCancellation,
+        tools: list[ToolSpec] | None = None,
+    ) -> AsyncIterator[LLMDelta]:
+        async with self._gates["llm"].slot():
+            cancellation.raise_if_cancelled()
+            async for delta in self.llm.generate_turn(messages, cancellation, tools):
+                yield delta
 
     async def synthesize_stream(
         self,

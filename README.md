@@ -22,6 +22,7 @@ Sau khi tải đủ model, pipeline không gọi API hoặc dịch vụ inferenc
 - Đã có utterance segmentation, conversation history, text chunking, playback queue, latency logs và barge-in bằng câu lệnh ngắt.
 - Đã có test cho chunker, history, state, cancellation, config, runtime dùng chung, session web và binary audio protocol.
 - Web có switch VI/EN theo từng session. VI preload khi khởi động; English model lazy-load lần đầu chọn EN rồi được dùng chung cho các client.
+- Đã có tool calling ở tầng LLM (`app/tools.py`, backend Ollama) và adapter cho thiết bị Xiaozhi ESP32 kèm device MCP.
 
 Unit test không tải model. Smoke test ngày 10/09/2026 trên RTX 5070 Ti 16 GB đã load đồng thời hai Parakeet cùng Ollama, switch WebSocket VI→EN thành công và Kokoro sinh PCM float32 24 kHz. Bạn vẫn cần kiểm tra giọng thật và thiết bị audio trong phòng sử dụng thực tế.
 
@@ -217,9 +218,30 @@ Browser N -- PCM/WebSocket -- WebVoiceSession N --┘   ├─ ASR gate -> Parak
        EventBroker và BrowserAudioOutput riêng         └─ TTS gate -> VieNeu
 
 CLI microphone/speaker -- VoiceOrchestrator -- ModelRuntime riêng
+
+ESP32 -- Opus/WebSocket -- DeviceSession ----------┘  (app/xiaozhi_adapter)
 ```
 
 Các interface ASR, LLM và TTS nằm trong `app/*/base.py`. Session sở hữu trạng thái hội thoại; runtime sở hữu model và lịch inference. Web input dùng PCM float32 16 kHz, web output dùng binary PCM float32 48 kHz có sequence number; CLI giữ PortAudio cho vận hành trực tiếp trên host.
+
+## Thiết bị Xiaozhi ESP32
+
+`app/xiaozhi_adapter` cho phép thiết bị [`78/xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) chính thức dùng pipeline VAD/ASR/LLM/TTS của project này. Adapter chỉ là lớp protocol và transport: Xiaozhi sở hữu giao thức thiết bị, project này sở hữu phần thông minh.
+
+Bật trong `config.yaml` rồi chạy `main.py --web` như bình thường — adapter dùng chung port với web UI:
+
+```yaml
+xiaozhi:
+  enabled: true
+```
+
+Trỏ thiết bị vào `ws://<IP LAN>:8080/xiaozhi/v1/` với `version = 1`. Xem `GET /api/xiaozhi` để biết thiết bị đang kết nối, audio params đã thương lượng và trạng thái MCP.
+
+Hỗ trợ: protocol version 1, hội thoại half-duplex, uplink Opus 16 kHz/60 ms, downlink Opus 24 kHz/60 ms có pacing, barge-in, và device MCP (thiết bị là MCP server, adapter là client) để LLM gọi tool trên thiết bị.
+
+Chi tiết cấu hình, hợp đồng API, hành vi MCP và danh sách tính năng **chưa** hỗ trợ: [`docs/xiaozhi_adapter.md`](docs/xiaozhi_adapter.md). Giao thức được xác định từ source firmware, không từ tài liệu: [`docs/xiaozhi_protocol_research.md`](docs/xiaozhi_protocol_research.md).
+
+Chưa test với ESP32 thật. Toàn bộ test tự động chạy qua một fake device.
 
 ## Test
 

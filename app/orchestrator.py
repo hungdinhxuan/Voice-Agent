@@ -19,11 +19,21 @@ from app.conversation.history import ConversationHistory
 from app.conversation.speech import prepare_for_speech
 from app.runtime import ModelRuntime
 from app.state import ConversationState, StateMachine
+from app.tools import (
+    ToolCall,
+    ToolProvider,
+    ToolSpec,
+    assistant_tool_message,
+    tool_result_message,
+)
 from app.utils.timing import TurnTiming
 from app.vad.silero import SileroVADSegmenter, VADEventType
 
 
 EventHandler = Callable[[dict[str, Any]], None]
+
+# A stalled audio consumer must not block a push-to-talk release forever.
+DRAIN_TIMEOUT_SECONDS = 1.0
 
 
 class VoiceOrchestrator:
@@ -36,9 +46,13 @@ class VoiceOrchestrator:
         use_local_microphone: bool = True,
         runtime: ModelRuntime | None = None,
         language: str | None = None,
+        tools: ToolProvider | None = None,
+        max_tool_rounds: int = 3,
     ) -> None:
         self.config = config
         self._event_handler = event_handler
+        self.tools = tools
+        self.max_tool_rounds = max_tool_rounds
         self.state = StateMachine()
         self.history = ConversationHistory(
             config.conversation.system_prompt,
@@ -60,6 +74,10 @@ class VoiceOrchestrator:
         self._turn_id = 0
         self._listen_after = 0.0
         self._interrupt_candidate = False
+
+    @property
+    def turn_id(self) -> int:
+        return self._turn_id
 
     async def run(self) -> None:
         speaker_started = False
@@ -121,7 +139,10 @@ class VoiceOrchestrator:
         assert self._audio_frames is not None
         while True:
             frame = await self._audio_frames.get()
-            await self._process_audio_frame(frame)
+            try:
+                await self._process_audio_frame(frame)
+            finally:
+                self._audio_frames.task_done()
 
     async def _process_audio_frame(self, frame: np.ndarray) -> None:
         assert self.vad is not None
@@ -145,7 +166,38 @@ class VoiceOrchestrator:
         if self._audio_frames.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._audio_frames.get_nowait()
+                self._audio_frames.task_done()
         self._audio_frames.put_nowait(audio.copy())
+
+    async def end_utterance(self) -> bool:
+        """Finish the utterance in progress immediately.
+
+        For clients that signal end-of-speech themselves (push-to-talk) instead
+        of relying on the server's silence detector. Returns False when there is
+        nothing buffered.
+        """
+
+        if self.vad is None:
+            return False
+        turn_before = self._turn_id
+        await self._drain_pending_audio()
+        event = self.vad.flush()
+        if event is not None and event.audio is not None:
+            await self._on_speech_end(event.audio)
+        return self._turn_id != turn_before
+
+    async def _drain_pending_audio(self) -> None:
+        """Let queued audio reach the VAD before the utterance is closed.
+
+        `feed_audio` only enqueues; the frames are consumed by another task. A
+        push-to-talk release arrives right behind the last audio frame, so
+        flushing immediately would cut the utterance short or lose it entirely.
+        """
+
+        if self._audio_frames is None:
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._audio_frames.join(), DRAIN_TIMEOUT_SECONDS)
 
     async def disconnect_audio_client(self) -> None:
         if self.state.state in {ConversationState.PROCESSING, ConversationState.SPEAKING}:
@@ -159,6 +211,7 @@ class VoiceOrchestrator:
             while not self._audio_frames.empty():
                 with contextlib.suppress(asyncio.QueueEmpty):
                     self._audio_frames.get_nowait()
+                    self._audio_frames.task_done()
 
     async def _on_speech_start(self) -> None:
         if not self._microphone_is_open():
@@ -178,6 +231,11 @@ class VoiceOrchestrator:
             self._interrupt_candidate = False
             await self._handle_interrupt_candidate(audio)
             return
+        if self.state.state is ConversationState.IDLE:
+            # Speech that began while the previous turn was still running, and
+            # that turn ended before the user stopped talking. Open the turn now
+            # instead of raising on an IDLE -> PROCESSING transition.
+            self._transition(ConversationState.LISTENING)
         self._transition(ConversationState.PROCESSING)
         self._turn_id += 1
         cancellation = TurnCancellation()
@@ -325,19 +383,63 @@ class VoiceOrchestrator:
         cancellation: TurnCancellation,
     ) -> None:
         chunker = StreamingTextChunker(self.config.tts_chunker)
+        conversation: list[dict] = list(messages)
+        rounds_left = self.max_tool_rounds
         try:
-            async for token in self.runtime.generate_stream(messages, cancellation):
-                if timing.first_token is None and token:
-                    timing.first_token = time.perf_counter()
-                full_response.append(token)
-                self._emit("assistant_delta", text=token)
-                for chunk in chunker.push(token):
-                    await text_queue.put(chunk)
+            while True:
+                tools = self._tool_specs() if rounds_left > 0 else None
+                pending: list[ToolCall] = []
+                async for delta in self.runtime.generate_turn(
+                    conversation,
+                    cancellation,
+                    tools,
+                ):
+                    if delta.text:
+                        if timing.first_token is None:
+                            timing.first_token = time.perf_counter()
+                        full_response.append(delta.text)
+                        self._emit("assistant_delta", text=delta.text)
+                        for chunk in chunker.push(delta.text):
+                            await text_queue.put(chunk)
+                    if delta.tool_calls:
+                        pending.extend(delta.tool_calls)
+                if not pending or rounds_left == 0:
+                    break
+                rounds_left -= 1
+                conversation = conversation + [assistant_tool_message(tuple(pending))]
+                for call in pending:
+                    conversation.append(
+                        tool_result_message(call, await self._run_tool(call, cancellation))
+                    )
             for chunk in chunker.flush():
                 await text_queue.put(chunk)
         finally:
             timing.llm_finished = time.perf_counter()
             await text_queue.put(None)
+
+    def _tool_specs(self) -> list[ToolSpec] | None:
+        if self.tools is None or not self.runtime.supports_tools:
+            return None
+        return self.tools.specs() or None
+
+    async def _run_tool(self, call: ToolCall, cancellation: TurnCancellation) -> str:
+        assert self.tools is not None
+        self._log(f"[TOOL] {call.name} {call.arguments}")
+        self._emit("tool_call", name=call.name, arguments=call.arguments)
+        started = time.perf_counter()
+        try:
+            result = await self.tools.call(call, cancellation)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            self._log(f"[TOOL] {call.name} error: {message}", level="error")
+            self._emit("tool_result", name=call.name, error=message)
+            return f"Tool error: {message}"
+        latency_ms = (time.perf_counter() - started) * 1000
+        self._emit("metric", name="tool_call", value=round(latency_ms), unit="ms")
+        self._emit("tool_result", name=call.name, result=result)
+        return result
 
     async def _consume_tts(
         self,
@@ -355,6 +457,7 @@ class VoiceOrchestrator:
                 continue
             if timing.tts_started is None:
                 timing.tts_started = time.perf_counter()
+            self._emit("tts_sentence", text=text)
             async for audio in self.runtime.synthesize_stream(
                 text,
                 cancellation,

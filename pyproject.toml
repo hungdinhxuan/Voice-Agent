@@ -45,6 +45,7 @@ dependencies = [
     "webdataset>=1,<2",
     "wget>=3.2,<4",
     "wrapt>=2.4,<3",
+    "av>=15,<19",
 ]
 
 [dependency-groups]

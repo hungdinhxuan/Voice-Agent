@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from app.cancellation import TurnCancellation
 from app.config import LLMConfig
 from app.llm.base import LLMService
+from app.tools import LLMDelta, ToolCall, ToolSpec
 
 
 class OllamaLLMService(LLMService):
@@ -42,12 +44,43 @@ class OllamaLLMService(LLMService):
                 ) from exc
             raise RuntimeError(f"Ollama load model thất bại: {exc.response.text}") from exc
 
+    @property
+    def supports_tools(self) -> bool:
+        return True
+
     async def generate_stream(
         self,
         messages: list[dict[str, str]],
         cancellation: TurnCancellation,
     ) -> AsyncIterator[str]:
-        payload = {
+        async for part in self._stream(self._payload(messages), cancellation):
+            token = part.get("message", {}).get("content", "")
+            if token:
+                yield token
+
+    async def generate_turn(
+        self,
+        messages: list[dict],
+        cancellation: TurnCancellation,
+        tools: list[ToolSpec] | None = None,
+    ) -> AsyncIterator[LLMDelta]:
+        payload = self._payload(messages, tools)
+        index = 0
+        async for part in self._stream(payload, cancellation):
+            message = part.get("message", {})
+            token = message.get("content", "")
+            if token:
+                yield LLMDelta(text=token)
+            calls, index = _parse_tool_calls(message.get("tool_calls"), index)
+            if calls:
+                yield LLMDelta(tool_calls=calls)
+
+    def _payload(
+        self,
+        messages: list[dict],
+        tools: list[ToolSpec] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "stream": True,
@@ -61,6 +94,15 @@ class OllamaLLMService(LLMService):
                 "num_ctx": self.config.context_length,
             },
         }
+        if tools:
+            payload["tools"] = [tool.to_openai() for tool in tools]
+        return payload
+
+    async def _stream(
+        self,
+        payload: dict[str, Any],
+        cancellation: TurnCancellation,
+    ) -> AsyncIterator[dict[str, Any]]:
         request = self._client.build_request("POST", "/api/chat", json=payload)
         response: httpx.Response | None = None
         try:
@@ -77,9 +119,7 @@ class OllamaLLMService(LLMService):
                 part = json.loads(line)
                 if error := part.get("error"):
                     raise RuntimeError(f"Ollama generation error: {error}")
-                token = part.get("message", {}).get("content", "")
-                if token:
-                    yield token
+                yield part
                 if part.get("done"):
                     break
         except httpx.ConnectError as exc:
@@ -91,3 +131,32 @@ class OllamaLLMService(LLMService):
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+def _parse_tool_calls(raw: Any, index: int) -> tuple[tuple[ToolCall, ...], int]:
+    """Ollama returns arguments as an object and supplies no call id, so mint one."""
+
+    if not isinstance(raw, list):
+        return (), index
+    calls: list[ToolCall] = []
+    for item in raw:
+        function = item.get("function") if isinstance(item, dict) else None
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        call_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(call_id, str) or not call_id:
+            call_id = f"call_{index}"
+        index += 1
+        calls.append(ToolCall(id=call_id, name=name, arguments=arguments))
+    return tuple(calls), index

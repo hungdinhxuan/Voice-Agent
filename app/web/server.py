@@ -20,6 +20,7 @@ from app.config import AppConfig, WebConfig
 from app.runtime import ModelRuntime
 from app.web.model_catalog import build_language_catalogs, build_model_catalog
 from app.web.sessions import VoiceSessionRegistry, WebVoiceSession
+from app.xiaozhi_adapter.server import DeviceSessionRegistry, register_xiaozhi_endpoint
 
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -32,17 +33,23 @@ def create_web_app(config: AppConfig) -> FastAPI:
     async def lifespan(app: FastAPI):
         runtime = ModelRuntime(config)
         await runtime.load()
+        if config.xiaozhi.enabled:
+            await runtime.load_language(config.xiaozhi.language)
         registry = VoiceSessionRegistry(config, runtime)
+        devices = DeviceSessionRegistry(config, runtime)
         app.state.runtime = runtime
         app.state.sessions = registry
+        app.state.xiaozhi_sessions = devices
         try:
             yield
         finally:
+            await devices.close_all()
             await registry.close_all()
             await runtime.close()
 
     app = FastAPI(title="Local Bilingual Voice Agent", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    register_xiaozhi_endpoint(app, config)
 
     @app.middleware("http")
     async def protect_runtime_api(request: Request, call_next):
@@ -92,6 +99,16 @@ def create_web_app(config: AppConfig) -> FastAPI:
     @app.get("/api/runtime")
     async def runtime() -> dict[str, Any]:
         return {"runtime": app.state.runtime.snapshot()}
+
+    @app.get("/api/xiaozhi")
+    async def xiaozhi() -> dict[str, Any]:
+        return {
+            "enabled": config.xiaozhi.enabled,
+            "path": config.xiaozhi.path,
+            "language": config.xiaozhi.language,
+            "protocol_version": config.xiaozhi.protocol_version,
+            "devices": app.state.xiaozhi_sessions.snapshots(),
+        }
 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:

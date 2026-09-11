@@ -79,6 +79,26 @@ class WebConfig:
 
 
 @dataclass(slots=True)
+class XiaozhiConfig:
+    """Adapter for official 78/xiaozhi-esp32 devices over WebSocket."""
+
+    enabled: bool = False
+    path: str = "/xiaozhi/v1/"
+    access_token: str | None = None
+    language: str = "vi"
+    max_sessions: int = 4
+    protocol_version: int = 1
+    downlink_sample_rate: int = 24000
+    frame_duration_ms: int = 60
+    opus_bitrate: int = 24000
+    prebuffer_frames: int = 5
+    max_queued_frames: int = 100
+    mcp_enabled: bool = True
+    mcp_timeout_seconds: float = 10.0
+    max_tool_rounds: int = 3
+
+
+@dataclass(slots=True)
 class TTSConfig:
     provider: str = "vieneu"
     model: str = "VieNeu-TTS v3 Turbo"
@@ -157,6 +177,7 @@ class AppConfig:
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     english: EnglishConfig = field(default_factory=EnglishConfig)
+    xiaozhi: XiaozhiConfig = field(default_factory=XiaozhiConfig)
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -251,6 +272,48 @@ class AppConfig:
                 raise ConfigError(f"{language}.tts.provider không được hỗ trợ: {tts.provider}")
         if self.audio.output_sample_rate != self.tts.sample_rate:
             raise ConfigError("audio.output_sample_rate phải bằng tts.sample_rate.")
+        self._validate_xiaozhi()
+
+    def _validate_xiaozhi(self) -> None:
+        xiaozhi = self.xiaozhi
+        if xiaozhi.language not in {"vi", "en"}:
+            raise ConfigError("xiaozhi.language chỉ hỗ trợ vi hoặc en.")
+        if not xiaozhi.path.startswith("/"):
+            raise ConfigError("xiaozhi.path phải bắt đầu bằng /.")
+        if xiaozhi.max_sessions < 1:
+            raise ConfigError("xiaozhi.max_sessions phải lớn hơn 0.")
+        if xiaozhi.protocol_version != 1:
+            raise ConfigError("xiaozhi.protocol_version chỉ hỗ trợ 1 (raw Opus).")
+        if xiaozhi.downlink_sample_rate not in {8000, 12000, 16000, 24000, 48000}:
+            raise ConfigError(
+                "xiaozhi.downlink_sample_rate phải là một trong 8000, 12000, 16000, "
+                "24000, 48000 (giới hạn của Opus)."
+            )
+        if xiaozhi.frame_duration_ms not in {20, 40, 60}:
+            raise ConfigError("xiaozhi.frame_duration_ms chỉ hỗ trợ 20, 40 hoặc 60.")
+        if not 6000 <= xiaozhi.opus_bitrate <= 128000:
+            raise ConfigError("xiaozhi.opus_bitrate phải nằm trong 6000..128000.")
+        # Thiết bị chỉ giữ 1200 / frame_duration gói trong queue giải mã.
+        device_queue_frames = 1200 // xiaozhi.frame_duration_ms
+        if not 0 <= xiaozhi.prebuffer_frames < device_queue_frames:
+            raise ConfigError(
+                f"xiaozhi.prebuffer_frames phải nằm trong 0..{device_queue_frames - 1} "
+                f"để không tràn queue giải mã của thiết bị."
+            )
+        if xiaozhi.max_queued_frames < 1:
+            raise ConfigError("xiaozhi.max_queued_frames phải lớn hơn 0.")
+        if xiaozhi.mcp_timeout_seconds <= 0:
+            raise ConfigError("xiaozhi.mcp_timeout_seconds phải lớn hơn 0.")
+        if xiaozhi.max_tool_rounds < 0:
+            raise ConfigError("xiaozhi.max_tool_rounds không được âm.")
+        if not xiaozhi.enabled:
+            return
+        if self.web.host not in {"127.0.0.1", "localhost", "::1"} and (
+            not xiaozhi.access_token or len(xiaozhi.access_token) < 16
+        ):
+            raise ConfigError(
+                "Thiết bị Xiaozhi trên LAN cần xiaozhi.access_token dài ít nhất 16 ký tự."
+            )
 
     def for_language(self, language: str) -> "AppConfig":
         code = language.casefold()

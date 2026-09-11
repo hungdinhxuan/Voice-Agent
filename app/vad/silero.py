@@ -52,6 +52,22 @@ class SileroVADSegmenter:
         self._silence_run = 0
         self._active = False
 
+    def flush(self) -> VADEvent | None:
+        """Close the current utterance now, without waiting for trailing silence.
+
+        Needed when the client owns end-of-speech (a push-to-talk release) rather
+        than the server's silence detector.
+        """
+
+        if not self._active or not self._buffer:
+            return None
+        utterance = np.concatenate(self._buffer).astype(np.float32, copy=False)
+        self._buffer = []
+        self._speech_run = 0
+        self._silence_run = 0
+        self._active = False
+        return VADEvent(VADEventType.SPEECH_END, utterance)
+
     def process(self, frame: np.ndarray) -> list[VADEvent]:
         import torch
 
