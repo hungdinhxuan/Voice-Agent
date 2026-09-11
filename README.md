@@ -237,6 +237,8 @@ xiaozhi:
 
 Trỏ thiết bị vào `ws://<IP LAN>:8080/xiaozhi/v1/` với `version = 1`. Xem `GET /api/xiaozhi` để biết thiết bị đang kết nối, audio params đã thương lượng và trạng thái MCP.
 
+Mở `/xiaozhi` để có console giả lập thiết bị ngay trong trình duyệt: nó nói đúng nửa client của giao thức, hiện từng frame thật trên socket kèm giải thích, tự đóng vai MCP server, và với Chrome/Edge thì mã hóa Opus từ microphone để chạy trọn một lượt hội thoại. Dùng để hiểu giao thức và test khi chưa có phần cứng.
+
 Hỗ trợ: protocol version 1, hội thoại half-duplex, uplink Opus 16 kHz/60 ms, downlink Opus 24 kHz/60 ms có pacing, barge-in, và device MCP (thiết bị là MCP server, adapter là client) để LLM gọi tool trên thiết bị.
 
 Chi tiết cấu hình, hợp đồng API, hành vi MCP và danh sách tính năng **chưa** hỗ trợ: [`docs/xiaozhi_adapter.md`](docs/xiaozhi_adapter.md). Giao thức được xác định từ source firmware, không từ tài liệu: [`docs/xiaozhi_protocol_research.md`](docs/xiaozhi_protocol_research.md).
