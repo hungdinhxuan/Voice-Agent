@@ -138,6 +138,19 @@ def test_nothing_is_registered_while_the_adapter_is_disabled() -> None:
     app = create_web_app(AppConfig())
 
     assert not any(str(route.path).startswith("/xiaozhi") for route in app.routes)
+    assert TestClient(app).get("/xiaozhi").status_code == 404
+
+
+def test_the_device_console_and_its_assets_are_served() -> None:
+    app, _, _ = build_app()
+    client = TestClient(app)
+
+    page = client.get("/xiaozhi")
+
+    assert page.status_code == 200
+    assert b"Device Console" in page.content
+    for asset in ("xiaozhi.css", "xiaozhi.js", "mic-processor.js"):
+        assert client.get(f"/static/{asset}").status_code == 200
 
 
 def test_a_custom_path_is_honoured() -> None:
