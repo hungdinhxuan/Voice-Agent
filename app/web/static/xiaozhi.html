@@ -63,7 +63,37 @@
         </article>
 
         <article class="card">
-          <h2>3 · Thiết bị đang ở state nào</h2>
+          <h2>3 · Robot qua Bluetooth</h2>
+          <p class="hint">Trình duyệt cầm luôn hai đầu: WebSocket ra server, BLE xuống robot.
+            Khi LLM gọi <code>tools/call</code>, lệnh được dịch thành một dòng lệnh gửi qua BLE.</p>
+          <div class="buttons">
+            <button id="ble" type="button">Kết nối robot (BLE)</button>
+            <span id="ble-state" class="ble-state">chưa kết nối</span>
+          </div>
+          <label class="row"><span>Profile UART</span>
+            <select id="ble-profile">
+              <option value="auto">tự dò (Nordic, HM-10)</option>
+              <option value="nordic">Nordic UART</option>
+              <option value="hm10">HM-10 / AT-09</option>
+              <option value="custom">UUID tự nhập</option>
+            </select>
+          </label>
+          <label class="row" id="custom-row" hidden><span>service / write UUID</span>
+            <input id="ble-uuid" type="text" placeholder="service,write">
+          </label>
+          <div class="buttons">
+            <button class="tiny" data-cmd="F20" type="button" disabled>F20</button>
+            <button class="tiny" data-cmd="B20" type="button" disabled>B20</button>
+            <button class="tiny" data-cmd="L90" type="button" disabled>L90</button>
+            <button class="tiny" data-cmd="R90" type="button" disabled>R90</button>
+            <button class="tiny" data-cmd="S" type="button" disabled>STOP</button>
+          </div>
+          <p class="hint">Bấm tay để thử dây trước khi thử bằng giọng nói. Lệnh cuối:
+            <code id="ble-last">—</code></p>
+        </article>
+
+        <article class="card">
+          <h2>4 · Thiết bị đang ở state nào</h2>
           <p class="hint">Firmware sở hữu state machine này. Server chỉ tác động gián tiếp qua <code>tts start</code> / <code>tts stop</code>.</p>
           <div id="states" class="states">
             <div class="state" data-state="idle"><b>idle</b><small>chờ</small></div>
@@ -75,7 +105,7 @@
         </article>
 
         <article class="card">
-          <h2>4 · Đàm phán audio</h2>
+          <h2>5 · Đàm phán audio</h2>
           <table class="kv">
             <tr><th>Uplink (mic)</th><td id="up">Opus 16000 Hz · 1ch · 60 ms</td></tr>
             <tr><th>Downlink (loa)</th><td id="down">—</td></tr>

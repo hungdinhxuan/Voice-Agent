@@ -101,3 +101,7 @@
   .xz .flow-card { max-height: 60vh; }
   .xz .explain-grid { grid-template-columns: 1fr; gap: 18px; }
 }
+
+.xz .ble-state { font-size: 12px; color: var(--muted); }
+.xz .ble-state.ok { color: var(--mint); }
+.xz button.tiny { padding: 5px 10px; font-size: 12px; font-variant-numeric: tabular-nums; }

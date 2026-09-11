@@ -232,6 +232,124 @@ function onBinary(buffer) {
   if ($('play').checked) decode(buffer);
 }
 
+// --------------------------------------------------------------- BLE bridge
+
+// Web Bluetooth chỉ nói được BLE/GATT. HC-05 và HC-06 là Bluetooth classic SPP
+// nên trình duyệt KHÔNG kết nối được — phải dùng HM-10, AT-09, JDY-08 hoặc ESP32.
+const UART_PROFILES = {
+  nordic: {
+    label: 'Nordic UART',
+    service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+    write: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+  },
+  hm10: { label: 'HM-10 / AT-09', service: 0xffe0, write: 0xffe1 },
+};
+
+// Tool robot: tên tool -> dòng lệnh gửi xuống Arduino.
+const MOVE_TOOLS = [
+  {
+    name: 'self.chassis.forward', description: 'Drive the robot forward',
+    arg: 'distance_cm', unit: 'distance in centimetres', min: 1, max: 500, fallback: 20,
+    command: (args) => `F${args.distance_cm ?? 20}`,
+  },
+  {
+    name: 'self.chassis.backward', description: 'Drive the robot backward',
+    arg: 'distance_cm', unit: 'distance in centimetres', min: 1, max: 500, fallback: 20,
+    command: (args) => `B${args.distance_cm ?? 20}`,
+  },
+  {
+    name: 'self.chassis.turn_left', description: 'Turn the robot left in place',
+    arg: 'degrees', unit: 'angle in degrees', min: 1, max: 360, fallback: 90,
+    command: (args) => `L${args.degrees ?? 90}`,
+  },
+  {
+    name: 'self.chassis.turn_right', description: 'Turn the robot right in place',
+    arg: 'degrees', unit: 'angle in degrees', min: 1, max: 360, fallback: 90,
+    command: (args) => `R${args.degrees ?? 90}`,
+  },
+  { name: 'self.chassis.stop', description: 'Stop the robot immediately', command: () => 'S' },
+];
+
+function moveToolSchema(tool) {
+  if (!tool.arg) return { name: tool.name, description: tool.description, inputSchema: { type: 'object', properties: {} } };
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        // Có default nên firmware bỏ nó khỏi `required`, và model không bị ép bịa số.
+        [tool.arg]: {
+          type: 'integer', minimum: tool.min, maximum: tool.max,
+          default: tool.fallback, description: tool.unit,
+        },
+      },
+    },
+  };
+}
+
+const ble = { device: null, characteristic: null, sent: 0 };
+
+function bleConnected() { return Boolean(ble.characteristic); }
+
+function setBle(text, ok) {
+  $('ble-state').textContent = text;
+  $('ble-state').className = `ble-state${ok ? ' ok' : ''}`;
+  for (const button of document.querySelectorAll('button[data-cmd]')) button.disabled = !ok;
+  $('ble').textContent = ok ? 'Ngắt robot' : 'Kết nối robot (BLE)';
+}
+
+function chosenProfiles() {
+  const choice = $('ble-profile').value;
+  if (choice === 'custom') {
+    const [service, write] = $('ble-uuid').value.split(',').map((part) => part.trim());
+    if (!service || !write) throw new Error('Cần nhập "service,write" UUID.');
+    return [{ label: 'custom', service, write }];
+  }
+  if (choice === 'auto') return Object.values(UART_PROFILES);
+  return [UART_PROFILES[choice]];
+}
+
+async function connectBle() {
+  if (!navigator.bluetooth) {
+    fail('bluetooth', 'Trình duyệt không có Web Bluetooth. Cần Chrome hoặc Edge, và trang phải chạy qua HTTPS.');
+    return;
+  }
+  const profiles = chosenProfiles();
+  const device = await navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: profiles.map((profile) => profile.service),
+  });
+  const server = await device.gatt.connect();
+  let last;
+  for (const profile of profiles) {
+    try {
+      const service = await server.getPrimaryService(profile.service);
+      ble.characteristic = await service.getCharacteristic(profile.write);
+      ble.device = device;
+      device.addEventListener('gattserverdisconnected', () => {
+        ble.characteristic = null; ble.device = null;
+        setBle('mất kết nối', false);
+        note('Robot ngắt BLE. Tool điều khiển sẽ trả lỗi cho LLM cho tới khi kết nối lại.');
+      });
+      setBle(`${device.name || 'robot'} · ${profile.label}`, true);
+      note(`Đã nối BLE tới ${device.name || 'thiết bị'} qua ${profile.label}. `
+        + 'Các tool chassis giờ đẩy lệnh thật xuống robot.');
+      return;
+    } catch (error) { last = error; }
+  }
+  device.gatt.disconnect();
+  throw new Error(`Không tìm thấy UART service nào. ${last}`);
+}
+
+async function bleSend(command) {
+  if (!bleConnected()) throw new Error('Robot chưa kết nối BLE.');
+  await ble.characteristic.writeValue(new TextEncoder().encode(`${command}\n`));
+  ble.sent += 1;
+  $('ble-last').textContent = command;
+  row('up', 'ble →robot', `Gửi "${command}" xuống AlphaBot2 (lệnh thứ ${ble.sent}).`);
+}
+
 // ---------------------------------------------------------------- fake MCP
 
 function buildTools() {
@@ -248,6 +366,9 @@ function buildTools() {
     description: 'Get the current status of this device',
     inputSchema: { type: 'object', properties: {} },
   }];
+  // Luôn khai tool robot, kể cả khi chưa nối BLE: lúc đó tools/call trả isError
+  // để LLM nói lại cho người dùng, thay vì im lặng không làm gì.
+  tools.push(...MOVE_TOOLS.map(moveToolSchema));
   if ($('user-tool').checked) {
     tools.push({
       name: 'self.reboot',
@@ -316,6 +437,8 @@ function handleMcp(payload) {
       return;
     }
     const args = payload.params?.arguments || {};
+    const move = MOVE_TOOLS.find((item) => item.name === name);
+    if (move) { runMove(id, move, args); return; }
     const text = name === 'self.get_device_status'
       ? JSON.stringify({ battery: 87, volume: 60, wifi: 'ok' })
       : `ok: ${JSON.stringify(args)}`;
@@ -326,6 +449,25 @@ function handleMcp(payload) {
 
   replyMcp({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not implemented: ${method}` } },
     'Method lạ nên trả -32601.');
+}
+
+// isError thay vì error JSON-RPC: LLM đọc được nội dung và nói lại cho người dùng,
+// thay vì coi đây là lỗi giao thức.
+async function runMove(id, move, args) {
+  const command = move.command(args);
+  try {
+    await bleSend(command);
+  } catch (error) {
+    replyMcp({
+      jsonrpc: '2.0', id,
+      result: { content: [{ type: 'text', text: `Không gửi được lệnh: ${error.message}` }], isError: true },
+    }, 'Robot chưa sẵn sàng. Trả isError để LLM giải thích cho người dùng.');
+    return;
+  }
+  replyMcp({
+    jsonrpc: '2.0', id,
+    result: { content: [{ type: 'text', text: `sent ${command}` }], isError: false },
+  }, `Đã đẩy "${command}" xuống robot qua BLE.`);
 }
 
 // ------------------------------------------------------------------- audio
@@ -462,6 +604,33 @@ $('mic').addEventListener('click', async () => {
 });
 
 $('clear-log').addEventListener('click', () => { $('flow').innerHTML = ''; app.audioRow = null; });
+
+$('ble-profile').addEventListener('change', (event) => {
+  $('custom-row').hidden = event.target.value !== 'custom';
+});
+
+$('ble').addEventListener('click', async () => {
+  if (bleConnected()) { ble.device?.gatt.disconnect(); return; }
+  try {
+    setBle('đang kết nối…', false);
+    await connectBle();
+  } catch (error) {
+    setBle('chưa kết nối', false);
+    fail('bluetooth', String(error.message || error));
+  }
+});
+
+for (const button of document.querySelectorAll('button[data-cmd]')) {
+  button.addEventListener('click', () => {
+    bleSend(button.dataset.cmd).catch((error) => fail('bluetooth', String(error.message || error)));
+  });
+}
+
+setBle('chưa kết nối', false);
+if (!navigator.bluetooth) {
+  $('ble').disabled = true;
+  setBle('trình duyệt không hỗ trợ Web Bluetooth', false);
+}
 
 setState('idle');
 enable(false);
