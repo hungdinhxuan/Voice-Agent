@@ -395,12 +395,23 @@ async function connectBle() {
   throw new Error(`Không tìm thấy UART service nào. ${last}`);
 }
 
-async function bleSend(command) {
-  if (!bleConnected()) throw new Error('Robot chưa kết nối BLE.');
-  await ble.characteristic.writeValue(new TextEncoder().encode(`${command}\n`));
-  ble.sent += 1;
+// Một đường gửi cho cả hai transport. USB được ưu tiên vì chỉ nối được một đường
+// tại một thời điểm, và đường USB còn đọc được phản hồi của robot.
+async function robotSend(command) {
+  const line = new TextEncoder().encode(`${command}\n`);
+  let via;
+  if (usbConnected()) {
+    await usb.writer.write(line);
+    via = 'usb';
+  } else if (bleConnected()) {
+    await ble.characteristic.writeValue(line);
+    via = 'ble';
+  } else {
+    throw new Error('Robot chưa kết nối. Bấm "Kết nối robot (BLE)" hoặc "hoặc qua USB".');
+  }
+  commandsSent += 1;
   $('ble-last').textContent = command;
-  row('up', 'ble →robot', `Gửi "${command}" xuống AlphaBot2 (lệnh thứ ${ble.sent}).`);
+  row('up', `${via} →robot`, `Gửi "${command}" xuống AlphaBot2 (lệnh thứ ${commandsSent}).`);
 }
 
 // ---------------------------------------------------------------- fake MCP
@@ -509,7 +520,7 @@ function handleMcp(payload) {
 async function runMove(id, move, args) {
   const command = move.command(args);
   try {
-    await bleSend(command);
+    await robotSend(command);
   } catch (error) {
     replyMcp({
       jsonrpc: '2.0', id,
@@ -520,7 +531,7 @@ async function runMove(id, move, args) {
   replyMcp({
     jsonrpc: '2.0', id,
     result: { content: [{ type: 'text', text: `sent ${command}` }], isError: false },
-  }, `Đã đẩy "${command}" xuống robot qua BLE.`);
+  }, `Đã đẩy "${command}" xuống robot.`);
 }
 
 // ------------------------------------------------------------------- audio
@@ -688,7 +699,7 @@ $('usb').addEventListener('click', async () => {
 
 for (const button of document.querySelectorAll('button[data-cmd]')) {
   button.addEventListener('click', () => {
-    bleSend(button.dataset.cmd).catch((error) => fail('bluetooth', String(error.message || error)));
+    robotSend(button.dataset.cmd).catch((error) => fail('robot', String(error.message || error)));
   });
 }
 

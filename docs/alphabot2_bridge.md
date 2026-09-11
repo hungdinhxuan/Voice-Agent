@@ -137,7 +137,7 @@ hoặc đặt robot xuống sàn trước.
      trước, vì mỗi lúc chỉ một chương trình giữ được cổng. Đường này còn **đọc được
      phản hồi** `ok F20` từ robot và hiện trong luồng message, điều mà BLE hiện chưa làm.
 3. Bấm thử `F20`, `L90`, `STOP` để chắc dây và hiệu chỉnh đã đúng. Mỗi lần bấm hiện
-   một dòng `ble →robot` trong luồng message.
+   một dòng `usb →robot` hoặc `ble →robot` trong luồng message, tùy đường đang nối.
 4. Bấm **Kết nối** (WebSocket), rồi **listen start**, rồi **Bật microphone**.
 5. Nói: *"Đi tới trước năm mươi phân"*, *"Rẽ trái chín mươi độ"*,
    *"Đi thẳng hai mươi phân rồi rẽ trái chín mươi độ"*.
