@@ -20,6 +20,7 @@ from app.xiaozhi_adapter.server import (
     DeviceSessionRegistry,
     _authorized,
     _await_hello,
+    _origin_allowed,
     _receive_loop,
 )
 
@@ -206,8 +207,8 @@ def test_wrong_token_is_refused() -> None:
     assert registry.count == 0
 
 
-def test_a_browser_origin_is_refused() -> None:
-    """An ESP32 never sends Origin, so anything that does is not a device."""
+def test_a_foreign_origin_is_refused() -> None:
+    """WebSocket ignores CORS, so any site could otherwise open a session."""
 
     app, registry, _ = build_app()
     client = TestClient(app)
@@ -221,6 +222,39 @@ def test_a_browser_origin_is_refused() -> None:
 
     assert refusal.value.code == CLOSE_UNAUTHORIZED
     assert registry.count == 0
+
+
+def test_the_device_console_can_connect_from_its_own_origin() -> None:
+    """The console at /xiaozhi is served by this server and must reach this
+    endpoint, and a browser always sends Origin."""
+
+    app, registry, _ = build_app()
+    client = TestClient(app)
+
+    # TestClient always sends Host: testserver, so this is the same origin.
+    with client.websocket_connect(
+        "/xiaozhi/v1/",
+        headers={**DEVICE_HEADERS, "Origin": "http://testserver"},
+    ) as websocket:
+        websocket.send_text(json.dumps(HELLO))
+        assert websocket.receive_json()["type"] == "hello"
+        assert registry.count == 1
+
+
+def test_origin_is_matched_on_host_so_a_tls_terminating_proxy_still_works() -> None:
+    """The browser sees https while the app sees plain http behind a tunnel."""
+
+    config = AppConfig()
+    config.web.allowed_origins = ["https://configured.example"]
+
+    assert _origin_allowed(None, "anything", config)
+    assert _origin_allowed("https://voiceagent.example", "voiceagent.example", config)
+    assert _origin_allowed("http://127.0.0.1:8080", "127.0.0.1:8080", config)
+    assert _origin_allowed("https://configured.example", "other.host", config)
+    assert not _origin_allowed("https://evil.example", "voiceagent.example", config)
+    assert not _origin_allowed("https://evil.example", None, config)
+    # A port mismatch is a different origin.
+    assert not _origin_allowed("http://127.0.0.1:9999", "127.0.0.1:8080", config)
 
 
 def test_the_session_cap_refuses_extra_devices() -> None:
