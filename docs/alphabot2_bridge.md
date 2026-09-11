@@ -64,6 +64,7 @@ Nối module BLE vào Arduino:
 | `R<deg>` | quay phải tại chỗ, vd `R180` |
 | `S` | dừng ngay |
 | `P` | ping, trả `OK` |
+| `T` | báo trạng thái để chẩn đoán, xem mục 5 |
 
 Sketch trả lại `ok F50`, `err unknown command` hoặc `err missing value`.
 Cùng bộ lệnh này nhận được từ **cả BLE lẫn USB**, nên bench test được khi chưa gắn
@@ -108,6 +109,15 @@ làm bánh xe quay**, dùng để kiểm tra sketch trước khi cấp nguồn �
 | `X` | `err unknown command` |
 | `F` | `err missing value` |
 | `F0` | `err missing value` |
+| `T` | `t=<millis> stop=<mốc dừng> left=<còn lại ms> ble=<số dòng> usb=<số dòng>` |
+
+`T` cho phép đo hành vi dừng **mà không cần nhìn robot**. Gửi `F400` rồi hỏi `T` mỗi
+giây: `left` phải giảm dần từ ~4000 (không phải 8800, vì bị `MAX_RUN_MS` chặn) rồi
+`stop` về 0. Gửi `S` giữa chừng thì `stop` phải về 0 ngay lập tức.
+
+`ble` đếm số dòng nhận từ SoftwareSerial. Khi chưa cắm module mà số này tự tăng thì
+chân `BT_RX` đang ăn nhiễu — sketch đã bật `INPUT_PULLUP` để tránh, nhưng vẫn nên
+kiểm tra nếu robot tự chạy không rõ lý do.
 
 Chỉ khi nhóm trên đúng hết mới chuyển sang `F20`, `L90` — và nhớ **kê bánh xe lên**
 hoặc đặt robot xuống sàn trước.

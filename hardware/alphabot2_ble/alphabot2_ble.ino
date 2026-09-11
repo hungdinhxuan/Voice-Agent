@@ -44,17 +44,18 @@ const unsigned long MAX_RUN_MS = 4000;
 unsigned long stopAt = 0;          // 0 nghĩa là đang đứng yên
 
 void handle(const char* command);
+void report();
 
 // Đọc từng dòng, mỗi cổng một bộ đệm riêng để hai nguồn không trộn vào nhau.
 struct LineReader {
   char buf[24];
   uint8_t len = 0;
 
-  void pump(Stream& port) {
+  void pump(Stream& port, unsigned long& counter) {
     while (port.available()) {
       char c = port.read();
       if (c == '\r') continue;
-      if (c == '\n') { buf[len] = '\0'; handle(buf); len = 0; continue; }
+      if (c == '\n') { buf[len] = '\0'; counter++; handle(buf); len = 0; continue; }
       if (len < sizeof(buf) - 1) buf[len++] = c;
     }
   }
@@ -63,11 +64,17 @@ struct LineReader {
 LineReader fromBle;
 LineReader fromUsb;
 
+unsigned long bleLines = 0;        // đếm dòng nhận từ BLE, để phát hiện nhiễu
+unsigned long usbLines = 0;
+
 void setup() {
   // Mảng tường minh: avr-libstdc++ không có <initializer_list> cho range-for.
   const uint8_t pins[] = {PWMA, AIN1, AIN2, BIN1, BIN2, PWMB};
   for (uint8_t i = 0; i < sizeof(pins); i++) pinMode(pins[i], OUTPUT);
   halt();
+  // Chưa cắm module BLE thì chân RX thả nổi, SoftwareSerial sẽ đọc ra nhiễu và
+  // có thể dựng thành một "lệnh" giả làm robot chạy tiếp. Pull-up giữ mức idle.
+  pinMode(BT_RX, INPUT_PULLUP);
   Serial.begin(115200);            // debug, và nhận lệnh khi bench test
   bt.begin(9600);                  // HM-10 mặc định 9600
   reply("ready");
@@ -77,9 +84,9 @@ void loop() {
   // Dừng đúng hạn trước, để lệnh S luôn cắt được chuyển động đang chạy.
   if (stopAt && millis() >= stopAt) halt();
 
-  fromBle.pump(bt);
+  fromBle.pump(bt, bleLines);
   // Nhận cùng bộ lệnh qua USB, để thử được khi chưa gắn module BLE.
-  fromUsb.pump(Serial);
+  fromUsb.pump(Serial, usbLines);
 }
 
 void handle(const char* command) {
@@ -88,6 +95,7 @@ void handle(const char* command) {
 
   if (verb == 'S') { halt(); reply("ok S"); return; }
   if (verb == 'P') { reply("OK"); return; }
+  if (verb == 'T') { report(); return; }
 
   // Kiểm tra lệnh trước tham số: atol("") cũng bằng 0, nên nếu đảo thứ tự thì
   // một lệnh lạ sẽ bị báo nhầm thành thiếu tham số.
@@ -128,6 +136,16 @@ void drive(int left, int right) {
 void halt() {
   drive(0, 0);
   stopAt = 0;
+}
+
+// Trạng thái để đo từ máy tính, không cần nhìn robot.
+void report() {
+  const unsigned long now = millis();
+  const long left = stopAt ? (long)(stopAt - now) : 0;
+  char text[56];
+  snprintf(text, sizeof(text), "t=%lu stop=%lu left=%ld ble=%lu usb=%lu",
+           now, stopAt, left, bleLines, usbLines);
+  reply(text);
 }
 
 void reply(const char* text) {
