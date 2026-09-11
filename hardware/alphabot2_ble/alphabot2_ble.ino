@@ -29,8 +29,8 @@ const uint8_t BIN2 = A3;
 const uint8_t PWMB = 5;   // tốc độ motor phải
 
 // --- module BLE (HM-10 / AT-09 / JDY-08) ------------------------------------
-const uint8_t BT_RX = 2;  // nối tới TX của module
-const uint8_t BT_TX = 3;  // nối tới RX của module
+const uint8_t BT_RX = 10;  // nối tới TX của module
+const uint8_t BT_TX = 11;  // nối tới RX của module
 SoftwareSerial bt(BT_RX, BT_TX);
 
 // --- hiệu chỉnh: đo rồi sửa hai số này --------------------------------------
@@ -42,13 +42,33 @@ const uint8_t SPEED = 120;         // 0..255, phải giống lúc hiệu chỉnh
 const unsigned long MAX_RUN_MS = 4000;
 
 unsigned long stopAt = 0;          // 0 nghĩa là đang đứng yên
-char line[24];
-uint8_t lineLen = 0;
+
+void handle(const char* command);
+
+// Đọc từng dòng, mỗi cổng một bộ đệm riêng để hai nguồn không trộn vào nhau.
+struct LineReader {
+  char buf[24];
+  uint8_t len = 0;
+
+  void pump(Stream& port) {
+    while (port.available()) {
+      char c = port.read();
+      if (c == '\r') continue;
+      if (c == '\n') { buf[len] = '\0'; handle(buf); len = 0; continue; }
+      if (len < sizeof(buf) - 1) buf[len++] = c;
+    }
+  }
+};
+
+LineReader fromBle;
+LineReader fromUsb;
 
 void setup() {
-  for (uint8_t pin : {PWMA, AIN1, AIN2, BIN1, BIN2, PWMB}) pinMode(pin, OUTPUT);
+  // Mảng tường minh: avr-libstdc++ không có <initializer_list> cho range-for.
+  const uint8_t pins[] = {PWMA, AIN1, AIN2, BIN1, BIN2, PWMB};
+  for (uint8_t i = 0; i < sizeof(pins); i++) pinMode(pins[i], OUTPUT);
   halt();
-  Serial.begin(115200);            // để debug qua USB
+  Serial.begin(115200);            // debug, và nhận lệnh khi bench test
   bt.begin(9600);                  // HM-10 mặc định 9600
   reply("ready");
 }
@@ -57,31 +77,34 @@ void loop() {
   // Dừng đúng hạn trước, để lệnh S luôn cắt được chuyển động đang chạy.
   if (stopAt && millis() >= stopAt) halt();
 
-  while (bt.available()) {
-    char c = bt.read();
-    if (c == '\r') continue;
-    if (c == '\n') { line[lineLen] = '\0'; handle(line); lineLen = 0; continue; }
-    if (lineLen < sizeof(line) - 1) line[lineLen++] = c;
-  }
+  fromBle.pump(bt);
+  // Nhận cùng bộ lệnh qua USB, để thử được khi chưa gắn module BLE.
+  fromUsb.pump(Serial);
 }
 
 void handle(const char* command) {
   if (!command[0]) return;
   const char verb = command[0];
-  const long value = atol(command + 1);
 
   if (verb == 'S') { halt(); reply("ok S"); return; }
   if (verb == 'P') { reply("OK"); return; }
 
-  if (value <= 0) { reply("err thiếu tham số"); return; }
+  // Kiểm tra lệnh trước tham số: atol("") cũng bằng 0, nên nếu đảo thứ tự thì
+  // một lệnh lạ sẽ bị báo nhầm thành thiếu tham số.
+  if (verb != 'F' && verb != 'B' && verb != 'L' && verb != 'R') {
+    reply("err unknown command");
+    return;
+  }
+
+  const long value = atol(command + 1);
+  if (value <= 0) { reply("err missing value"); return; }
 
   unsigned long duration;
   switch (verb) {
     case 'F': duration = value * MS_PER_CM;     drive(SPEED, SPEED);   break;
     case 'B': duration = value * MS_PER_CM;     drive(-SPEED, -SPEED); break;
     case 'L': duration = value * MS_PER_DEGREE; drive(-SPEED, SPEED);  break;
-    case 'R': duration = value * MS_PER_DEGREE; drive(SPEED, -SPEED);  break;
-    default:  reply("err lệnh lạ"); return;
+    default:  duration = value * MS_PER_DEGREE; drive(SPEED, -SPEED);  break;
   }
 
   if (duration > MAX_RUN_MS) duration = MAX_RUN_MS;

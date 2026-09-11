@@ -41,13 +41,12 @@ Nối module BLE vào Arduino:
 | --- | --- |
 | VCC | 5 V (một số module chỉ chịu 3.3 V — kiểm tra datasheet) |
 | GND | GND |
-| TX | `BT_RX` trong sketch (mặc định D2) |
-| RX | `BT_TX` trong sketch (mặc định D3) |
+| TX | `BT_RX` trong sketch (mặc định D10) |
+| RX | `BT_TX` trong sketch (mặc định D11) |
 
-> Hai chân D2/D3 trong sketch **chỉ là mặc định mình đặt ra**, chưa đối chiếu với bo
-> AlphaBot2 của bạn. AlphaBot2 đã dùng nhiều chân cho cảm biến hồng ngoại, joystick,
-> buzzer và siêu âm. Mở schematic Waveshare, chọn hai chân còn trống rồi sửa lại
-> `BT_RX` / `BT_TX`.
+> Hai chân D10/D11 vẫn cần bạn đối chiếu với bo AlphaBot2 của mình. AlphaBot2 đã dùng
+> nhiều chân cho cảm biến hồng ngoại, joystick, buzzer và siêu âm. Mở schematic
+> Waveshare, xác nhận hai chân này còn trống, nếu không thì sửa `BT_RX` / `BT_TX`.
 >
 > Tương tự, các chân motor trong sketch lấy theo demo AlphaBot2-Ar của Waveshare
 > (TB6612FNG: PWMA D6, AIN1 A1, AIN2 A0, BIN1 A2, BIN2 A3, PWMB D5). Hãy xác nhận
@@ -66,7 +65,9 @@ Nối module BLE vào Arduino:
 | `S` | dừng ngay |
 | `P` | ping, trả `OK` |
 
-Sketch trả lại `ok F50` hoặc `err <lý do>`.
+Sketch trả lại `ok F50`, `err unknown command` hoặc `err missing value`.
+Cùng bộ lệnh này nhận được từ **cả BLE lẫn USB**, nên bench test được khi chưa gắn
+module BLE — xem mục 5.
 
 Hai điểm an toàn đã có sẵn: chuyển động là **không chặn** nên `S` cắt được giữa chừng,
 và mọi lệnh bị chặn trên ở `MAX_RUN_MS` (4 giây) để robot không chạy mãi nếu trình
@@ -87,7 +88,31 @@ Chưa hiệu chỉnh thì "đi 50 cm" chỉ là con số trong lời nói, khôn
 Sàn nhà, mức pin và tải đều ảnh hưởng. Đây là ước lượng theo thời gian, đừng kỳ vọng
 độ chính xác của encoder.
 
-## 5. Chạy thử
+## 5. Bench test qua USB, chưa cần BLE
+
+Cắm Arduino vào máy rồi nạp:
+
+```bash
+CLI="/c/Program Files/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"
+"$CLI" compile --fqbn arduino:avr:uno hardware/alphabot2_ble
+"$CLI" upload -p COM3 --fqbn arduino:avr:uno hardware/alphabot2_ble
+```
+
+Mở Serial Monitor ở **115200**, gõ lệnh và xem phản hồi. Nhóm lệnh dưới đây **không
+làm bánh xe quay**, dùng để kiểm tra sketch trước khi cấp nguồn động cơ:
+
+| Gõ | Phải nhận |
+| --- | --- |
+| `P` | `OK` |
+| `S` | `ok S` |
+| `X` | `err unknown command` |
+| `F` | `err missing value` |
+| `F0` | `err missing value` |
+
+Chỉ khi nhóm trên đúng hết mới chuyển sang `F20`, `L90` — và nhớ **kê bánh xe lên**
+hoặc đặt robot xuống sàn trước.
+
+## 6. Chạy thử đầy đủ
 
 1. Bật server có `xiaozhi.enabled: true`, mở **https://\<domain\>/xiaozhi** bằng
    Chrome hoặc Edge.
@@ -103,13 +128,13 @@ Sàn nhà, mức pin và tải đều ảnh hưởng. Đây là ước lượng 
 Ở cột luồng message bạn sẽ thấy đủ chuỗi: `stt` → `mcp · tools/call` →
 `ble →robot` → `mcp · reply` → `tts` — tức từ tiếng nói tới bánh xe.
 
-## 6. Khi chưa nối BLE
+## 7. Khi chưa nối BLE
 
 Tool `self.chassis.*` **luôn** được khai với server, kể cả khi robot chưa nối. Gọi lúc
 đó sẽ trả `isError: true` kèm lý do, nên LLM nói lại cho người dùng thay vì im lặng
 không làm gì. Kết nối lại BLE là dùng được ngay, không cần mở lại WebSocket.
 
-## 7. Về tham số mặc định
+## 8. Về tham số mặc định
 
 Mỗi tool khai `default` cho tham số (20 cm, 90 độ). Việc này có chủ đích: firmware
 Xiaozhi bỏ property có `default` ra khỏi `required`, nên khi bạn nói *"tiến lên đi"*
@@ -119,9 +144,11 @@ mà không kèm số, model không bị ép bịa ra một con số.
 `distance_cm: 50` cho câu *"Tiến lên phía trước đi"*. Với robot thật thì đó là hành vi
 nguy hiểm.
 
-## 8. Giới hạn
+## 9. Giới hạn
 
-- Chưa test với AlphaBot2 thật. Sketch và chân cắm cần bạn đối chiếu và hiệu chỉnh.
+- Sketch đã compile và nạp thật lên Arduino Uno, và bộ phân tích lệnh đã test qua USB
+  (`P`, `S`, lệnh lạ, thiếu tham số đều đúng). **Chưa test phần chạy động cơ**, chưa
+  test trên AlphaBot2 thật, và chưa test qua BLE.
 - Console gửi lệnh một chiều và không đọc phản hồi `ok`/`err` từ BLE về; nó chỉ báo
   đã ghi xong. Muốn LLM biết robot bị kẹt thì phải subscribe characteristic notify —
   chưa làm.
