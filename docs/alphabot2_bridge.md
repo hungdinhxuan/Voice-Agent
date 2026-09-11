@@ -24,10 +24,13 @@ thiết kế MCP của Xiaozhi: thiết bị là MCP server, backend là client.
 | HM-10, AT-09, JDY-08, MLT-BT05 | BLE | Có |
 | ESP32, nRF52 | BLE | Có |
 
-Nếu bạn đang có HC-05/HC-06 thì không có cách nào cứu từ phía trình duyệt — phải đổi
-sang module BLE. Đây là giới hạn của API, không phải của dự án này.
+Đây là giới hạn của API, không phải của dự án này.
 
-**Chưa có module BLE nào vẫn chạy được**: console còn một đường **USB** qua Web Serial.
+**Có HC-05/HC-06 vẫn chạy không dây được**, chỉ là đi đường khác: Windows pair thiết bị
+SPP rồi dựng một **cổng COM ảo**, và Web Serial mở cổng đó y như cổng USB thật. Xem
+mục 5b.
+
+**Chưa có module Bluetooth nào vẫn chạy được**: console còn một đường **USB** qua Web Serial.
 Arduino cắm vào chính máy đang mở trang là dùng được, không cần thêm phần cứng. Đánh
 đổi là robot bị buộc vào sợi cáp — dùng để kiểm thử toàn tuyến trước khi mua module.
 
@@ -125,6 +128,30 @@ kiểm tra nếu robot tự chạy không rõ lý do.
 
 Chỉ khi nhóm trên đúng hết mới chuyển sang `F20`, `L90` — và nhớ **kê bánh xe lên**
 hoặc đặt robot xuống sàn trước.
+
+## 5b. Chạy HC-05 / HC-06 qua cổng COM ảo
+
+Module classic không nói được với Web Bluetooth, nhưng nói được với Web Serial sau khi
+Windows pair nó.
+
+Nối module vào Arduino (giống bảng ở mục 2: TX → D10, RX → D11). Lưu ý chân **RX của
+HC-05 chỉ chịu 3.3 V** trong khi Arduino phát 5 V — đúng bài phải chia áp bằng hai trở
+1 kΩ / 2 kΩ. Nhiều người bỏ qua và vẫn chạy, nhưng đó là chạy ngoài spec.
+
+1. Cấp nguồn, đèn HC-05 nháy nhanh tức là đang chờ pair.
+2. **Settings → Bluetooth & devices → Add device → Bluetooth** → chọn `HC-05`, mã
+   **1234** (một số bo là **0000**).
+3. Windows tạo thêm *Standard Serial over Bluetooth link (COMx)*. Kiểm tra bằng:
+   `Get-PnpDevice -Class Ports | Select-Object Status,FriendlyName`
+4. Trong console bấm **hoặc qua USB**, chọn đúng cổng COM mới đó.
+
+Kết nối thật chỉ hình thành khi trình duyệt mở cổng — lúc đó đèn HC-05 chuyển từ nháy
+nhanh sang chớp chậm hoặc sáng đều. Đó là tín hiệu để biết đã thông.
+
+Đường này **đọc được phản hồi** `ok F20` về, vì sketch trả lời trên SoftwareSerial và
+HC-05 đẩy ngược qua cổng COM. Baud phía host không quan trọng: SPP là gói tin, còn tốc
+độ UART thật giữa HC-05 và Arduino là 9600 do module tự giữ, khớp với `bt.begin(9600)`
+trong sketch. Arduino cũng **không bị reset** khi mở cổng, khác đường USB.
 
 ## 6. Chạy thử đầy đủ
 
