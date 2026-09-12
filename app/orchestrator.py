@@ -309,6 +309,7 @@ class VoiceOrchestrator:
             messages = self.history.messages_with_user(text)
             text_queue: asyncio.Queue[str | None] = asyncio.Queue()
             full_response: list[str] = []
+            tool_messages: list[dict] = []
             first_played_task = asyncio.create_task(
                 self._record_first_played(turn_id, timing),
                 name=f"first-played-{turn_id}",
@@ -316,7 +317,9 @@ class VoiceOrchestrator:
             timing.llm_started = time.perf_counter()
 
             llm_task = asyncio.create_task(
-                self._produce_llm(messages, text_queue, full_response, timing, cancellation),
+                self._produce_llm(
+                    messages, text_queue, full_response, tool_messages, timing, cancellation
+                ),
                 name=f"llm-{turn_id}",
             )
             tts_task = asyncio.create_task(
@@ -343,7 +346,7 @@ class VoiceOrchestrator:
 
             assistant_text = "".join(full_response).strip()
             if assistant_text:
-                self.history.commit(text, assistant_text)
+                self.history.commit(text, assistant_text, tool_messages)
                 self._emit("assistant_done", text=assistant_text)
             if timing.first_token is not None:
                 first_token_ms = timing.milliseconds(timing.llm_started, timing.first_token)
@@ -379,6 +382,7 @@ class VoiceOrchestrator:
         messages: list[dict[str, str]],
         text_queue: asyncio.Queue[str | None],
         full_response: list[str],
+        tool_messages: list[dict],
         timing: TurnTiming,
         cancellation: TurnCancellation,
     ) -> None:
@@ -406,11 +410,15 @@ class VoiceOrchestrator:
                 if not pending or rounds_left == 0:
                     break
                 rounds_left -= 1
-                conversation = conversation + [assistant_tool_message(tuple(pending))]
+                # Also kept for the next turn: without the call in the history the
+                # model reads its own past answers as "just say it was done".
+                round_messages = [assistant_tool_message(tuple(pending))]
                 for call in pending:
-                    conversation.append(
+                    round_messages.append(
                         tool_result_message(call, await self._run_tool(call, cancellation))
                     )
+                tool_messages.extend(round_messages)
+                conversation = conversation + round_messages
             for chunk in chunker.flush():
                 await text_queue.put(chunk)
         finally:
