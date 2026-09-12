@@ -289,7 +289,7 @@ function moveToolSchema(tool) {
 }
 
 const ble = { device: null, characteristic: null };
-const usb = { port: null, writer: null };
+const usb = { port: null, writer: null, onLine: null };
 let commandsSent = 0;
 
 function bleConnected() { return Boolean(ble.characteristic); }
@@ -307,8 +307,34 @@ async function connectUsb() {
   usb.port = port;
   usb.writer = port.writable.getWriter();
   readUsb(port);
-  setBle(`USB · ${port.getInfo?.().usbProductId ?? 'serial'}`, true);
-  note('Đã nối robot qua USB. Arduino reset khi mở cổng, chờ khoảng 2 giây rồi hãy gửi lệnh.');
+
+  // getInfo() chỉ có vendor/product id với cổng USB thật. Cổng COM ảo của một
+  // thiết bị Bluetooth cũng hiện trong hộp thoại chọn cổng và trông y hệt, nên
+  // nói rõ ra thay vì để người dùng tưởng đã cắm đúng dây.
+  const info = port.getInfo?.() ?? {};
+  const usbPort = info.usbProductId !== undefined;
+  setBle(usbPort ? `USB · ${info.usbProductId}` : 'Serial · không phải USB', true);
+
+  // Arduino reset khi cổng mở và mất khoảng 2 giây mới chạy. Lệnh gửi trong
+  // khoảng đó rơi vào hư không. Chờ chính dòng "ready" của sketch thay vì đoán.
+  const boot = await waitForRobotLine(4000);
+  if (boot) {
+    note(`Robot đã boot và trả lời "${boot}". Đường xuống robot thông, gửi lệnh được ngay.`);
+  } else if (usbPort) {
+    note('Mở được cổng nhưng robot im trong 4 giây. Sketch có thể chưa được nạp, '
+      + 'hoặc baud không phải 115200. Bấm F20 thử, không thấy "robot →" là chưa thông.');
+  } else {
+    note('Cổng này không phải USB — nhiều khả năng là cổng COM ảo của một thiết bị '
+      + 'Bluetooth, và robot không nằm ở đầu kia. Chọn lại cổng Arduino.');
+  }
+}
+
+// Lấy dòng đầu tiên robot nói ra, hoặc null nếu hết giờ.
+function waitForRobotLine(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { usb.onLine = null; resolve(null); }, ms);
+    usb.onLine = (line) => { clearTimeout(timer); usb.onLine = null; resolve(line); };
+  });
 }
 
 async function readUsb(port) {
@@ -326,7 +352,7 @@ async function readUsb(port) {
         const line = pending.slice(0, index).trim();
         pending = pending.slice(index + 1);
         // Phản hồi thật của robot, thứ mà đường BLE hiện chưa đọc được.
-        if (line) row('down', 'robot →', line);
+        if (line) { row('down', 'robot →', line); usb.onLine?.(line); }
       }
     }
   } catch (error) {
@@ -395,13 +421,20 @@ async function connectBle() {
   throw new Error(`Không tìm thấy UART service nào. ${last}`);
 }
 
+function withTimeout(promise, ms, message) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
+}
+
 // Một đường gửi cho cả hai transport. USB được ưu tiên vì chỉ nối được một đường
 // tại một thời điểm, và đường USB còn đọc được phản hồi của robot.
 async function robotSend(command) {
   const line = new TextEncoder().encode(`${command}\n`);
   let via;
   if (usbConnected()) {
-    await usb.writer.write(line);
+    // Cổng COM của một thiết bị Bluetooth vắng mặt mở được nhưng ghi thì treo
+    // vô hạn. Không chặn thì tools/call không bao giờ trả lời, LLM đứng im.
+    await withTimeout(usb.writer.write(line), 4000,
+      'Cổng serial không nhận lệnh sau 4 giây. Nhiều khả năng đây không phải cổng của robot.');
     via = 'usb';
   } else if (bleConnected()) {
     await ble.characteristic.writeValue(line);

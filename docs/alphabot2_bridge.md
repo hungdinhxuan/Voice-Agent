@@ -191,8 +191,14 @@ nguy hiểm.
 ## 9. Giới hạn
 
 - Sketch đã compile và nạp thật lên Arduino Uno, và bộ phân tích lệnh đã test qua USB
-  (`P`, `S`, lệnh lạ, thiếu tham số đều đúng). **Chưa test phần chạy động cơ**, chưa
-  test trên AlphaBot2 thật, và chưa test qua BLE.
+  (`P`, `S`, `T`, lệnh lạ, thiếu tham số đều đúng). Động cơ đã chạy thật và bốn hướng
+  đã đúng chiều. **Chưa hiệu chỉnh quãng đường** (xem mục 4).
+- Đường **BLE và cổng COM ảo của Bluetooth chưa bao giờ thông**. Với HC-05 đã pair sẵn,
+  mở cổng COM lúc treo vô hạn, lúc báo cổng không tồn tại, và `T` luôn trả `ble=0` —
+  chưa một byte nào tới chân SoftwareSerial. Chỉ đường **USB** là đã chạy.
+- Logic phía trình duyệt của đường USB có test tự động:
+  `node tests/test_xiaozhi_console.mjs` (không cần cài gì ngoài node). Nó giả lập cổng
+  Web Serial và kiểm cả chuỗi `tools/call` → byte gửi xuống → phản hồi đọc về.
 - Đường **BLE** gửi một chiều, chưa đọc phản hồi `ok`/`err` về; muốn vậy phải subscribe
   characteristic notify. Đường **USB** thì đọc được và hiện trong luồng message.
 - Một lệnh mỗi lần. Model gọi nhiều tool liên tiếp thì các lệnh nối đuôi nhau, robot
