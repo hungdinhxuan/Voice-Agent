@@ -72,8 +72,15 @@ Nối module BLE vào Arduino:
 | `S` | dừng ngay |
 | `P` | ping, trả `OK` |
 | `T` | báo trạng thái để chẩn đoán, xem mục 5 |
+| `S` | dừng ngay và huỷ mọi động tác còn chờ |
 
-Sketch trả lại `ok F50`, `err unknown command` hoặc `err missing value`.
+Sketch trả lại `ok F50` khi lệnh chạy ngay, `queued F50 (2)` khi lệnh phải xếp hàng,
+hoặc `err unknown command` / `err missing value` / `err queue full`.
+
+**Lệnh được xếp hàng.** Một câu như *"rẽ phải rồi đi thẳng hai mươi phân"* làm model gọi
+hai tool, và console đẩy hai dòng lệnh xuống cách nhau vài mili giây. Sketch giữ tối đa
+6 động tác và chạy lần lượt, nghỉ 150 ms giữa hai động tác. `S` dừng ngay **và xoá cả
+hàng đợi** — bảo dừng mà robot vẫn chạy tiếp là hành vi sai.
 Cùng bộ lệnh này nhận được từ **cả BLE lẫn USB**, nên bench test được khi chưa gắn
 module BLE — xem mục 5.
 
@@ -116,7 +123,7 @@ làm bánh xe quay**, dùng để kiểm tra sketch trước khi cấp nguồn �
 | `X` | `err unknown command` |
 | `F` | `err missing value` |
 | `F0` | `err missing value` |
-| `T` | `t=<millis> stop=<mốc dừng> left=<còn lại ms> ble=<số dòng> usb=<số dòng>` |
+| `T` | `t=<millis> stop=<mốc dừng> left=<còn lại ms> queue=<đang chờ> ble=<số dòng> usb=<số dòng>` |
 
 `T` cho phép đo hành vi dừng **mà không cần nhìn robot**. Gửi `F400` rồi hỏi `T` mỗi
 giây: `left` phải giảm dần từ ~4000 (không phải 8800, vì bị `MAX_RUN_MS` chặn) rồi
@@ -201,6 +208,6 @@ nguy hiểm.
   Web Serial và kiểm cả chuỗi `tools/call` → byte gửi xuống → phản hồi đọc về.
 - Đường **BLE** gửi một chiều, chưa đọc phản hồi `ok`/`err` về; muốn vậy phải subscribe
   characteristic notify. Đường **USB** thì đọc được và hiện trong luồng message.
-- Một lệnh mỗi lần. Model gọi nhiều tool liên tiếp thì các lệnh nối đuôi nhau, robot
-  không xếp hàng: lệnh sau ghi đè `stopAt` của lệnh trước.
+- Hàng đợi chỉ giữ 6 động tác; quá thì trả `err queue full` và LLM nói lại cho người dùng.
+  Mỗi động tác vẫn bị `MAX_RUN_MS` chặn ở 4 giây.
 - Trình duyệt phải mở và ở gần robot trong tầm BLE (~10 m).

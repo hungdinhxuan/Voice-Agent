@@ -96,6 +96,10 @@ class XiaozhiConfig:
     mcp_enabled: bool = True
     mcp_timeout_seconds: float = 10.0
     max_tool_rounds: int = 3
+    # Off by default: transcripts are the user's speech, and the log outlives the
+    # session. Turn it on while diagnosing why a turn did not call a tool - the
+    # character count alone never says which words the model was answering.
+    log_transcripts: bool = False
 
 
 @dataclass(slots=True)

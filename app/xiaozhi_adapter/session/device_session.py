@@ -379,7 +379,10 @@ class DeviceSession:
     async def _on_agent_event(self, event: AgentEvent) -> None:
         if event.kind == agent_events.TRANSCRIPT:
             text = event.text()
-            self.log.event("stt", chars=len(text))
+            if self.settings.log_transcripts:
+                self.log.event("stt", chars=len(text), text=text)
+            else:
+                self.log.event("stt", chars=len(text))
             await self._start_speaking(text)
         elif event.kind == agent_events.SENTENCE:
             await self.transport.send_json(

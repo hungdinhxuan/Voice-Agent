@@ -132,3 +132,4 @@ xiaozhi:
   mcp_enabled: true
   mcp_timeout_seconds: 10.0
   max_tool_rounds: 3
+  log_transcripts: false

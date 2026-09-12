@@ -47,10 +47,23 @@ const uint8_t SPEED = 120;         // 0..255, phải giống lúc hiệu chỉnh
 // Robot không được chạy mãi nếu console mất kết nối giữa chừng.
 const unsigned long MAX_RUN_MS = 4000;
 
+// Một câu như "rẽ phải rồi đi thẳng hai mươi phân" làm model gọi hai tool, và
+// console đẩy hai dòng lệnh xuống cách nhau vài mili giây. Không xếp hàng thì
+// lệnh sau ghi đè mốc dừng của lệnh trước, nên động tác đầu gần như không chạy.
+const uint8_t QUEUE_MAX = 6;
+const unsigned long SETTLE_MS = 150;   // đứng yên giữa hai động tác cho đỡ trôi
+
+struct Move { char verb; long value; };
+Move queued[QUEUE_MAX];
+uint8_t queueLen = 0;
+
 unsigned long stopAt = 0;          // 0 nghĩa là đang đứng yên
+unsigned long resumeAt = 0;        // chưa tới mốc này thì chưa lấy lệnh kế
 
 void handle(const char* command);
 void report();
+bool enqueue(char verb, long value);
+void startNext();
 
 // Đọc từng dòng, mỗi cổng một bộ đệm riêng để hai nguồn không trộn vào nhau.
 struct LineReader {
@@ -88,7 +101,12 @@ void setup() {
 
 void loop() {
   // Dừng đúng hạn trước, để lệnh S luôn cắt được chuyển động đang chạy.
-  if (stopAt && millis() >= stopAt) halt();
+  if (stopAt && millis() >= stopAt) {
+    drive(0, 0);
+    stopAt = 0;
+    resumeAt = millis() + SETTLE_MS;
+  }
+  if (!stopAt && queueLen && millis() >= resumeAt) startNext();
 
   fromBle.pump(bt, bleLines);
   // Nhận cùng bộ lệnh qua USB, để thử được khi chưa gắn module BLE.
@@ -99,7 +117,7 @@ void handle(const char* command) {
   if (!command[0]) return;
   const char verb = command[0];
 
-  if (verb == 'S') { halt(); reply("ok S"); return; }
+  if (verb == 'S') { halt(); reply("ok S"); return; }   // halt xoá cả hàng đợi
   if (verb == 'P') { reply("OK"); return; }
   if (verb == 'T') { report(); return; }
 
@@ -113,6 +131,36 @@ void handle(const char* command) {
   const long value = atol(command + 1);
   if (value <= 0) { reply("err missing value"); return; }
 
+  if (!enqueue(verb, value)) { reply("err queue full"); return; }
+
+  char ack[32];
+  // Chạy ngay thì "ok", còn xếp hàng thì nói rõ đang đứng thứ mấy: người đọc
+  // luồng message phân biệt được lệnh đã thực thi và lệnh còn chờ.
+  if (!stopAt && millis() >= resumeAt) {
+    startNext();
+    snprintf(ack, sizeof(ack), "ok %s", command);
+  } else {
+    snprintf(ack, sizeof(ack), "queued %s (%u)", command, queueLen);
+  }
+  reply(ack);
+}
+
+bool enqueue(char verb, long value) {
+  if (queueLen >= QUEUE_MAX) return false;
+  queued[queueLen].verb = verb;
+  queued[queueLen].value = value;
+  queueLen++;
+  return true;
+}
+
+// Lấy lệnh đầu hàng ra chạy. Hàng ngắn nên dồn mảng cho đơn giản.
+void startNext() {
+  if (!queueLen) return;
+  const char verb = queued[0].verb;
+  const long value = queued[0].value;
+  for (uint8_t i = 1; i < queueLen; i++) queued[i - 1] = queued[i];
+  queueLen--;
+
   unsigned long duration;
   switch (verb) {
     case 'F': duration = value * MS_PER_CM;     drive(SPEED, SPEED);   break;
@@ -120,13 +168,8 @@ void handle(const char* command) {
     case 'L': duration = value * MS_PER_DEGREE; drive(-SPEED, SPEED);  break;
     default:  duration = value * MS_PER_DEGREE; drive(SPEED, -SPEED);  break;
   }
-
   if (duration > MAX_RUN_MS) duration = MAX_RUN_MS;
   stopAt = millis() + duration;
-
-  char ack[24];
-  snprintf(ack, sizeof(ack), "ok %s", command);
-  reply(ack);
 }
 
 // left và right: âm là lùi, dương là tiến, |giá trị| là PWM.
@@ -141,18 +184,22 @@ void drive(int left, int right) {
   analogWrite(PWMB, abs(right));
 }
 
+// Dừng nghĩa là dừng hẳn: bỏ luôn những động tác còn đang chờ, nếu không thì
+// robot sẽ tự chạy tiếp ngay sau khi người dùng bảo nó dừng.
 void halt() {
   drive(0, 0);
   stopAt = 0;
+  resumeAt = 0;
+  queueLen = 0;
 }
 
 // Trạng thái để đo từ máy tính, không cần nhìn robot.
 void report() {
   const unsigned long now = millis();
   const long left = stopAt ? (long)(stopAt - now) : 0;
-  char text[56];
-  snprintf(text, sizeof(text), "t=%lu stop=%lu left=%ld ble=%lu usb=%lu",
-           now, stopAt, left, bleLines, usbLines);
+  char text[72];
+  snprintf(text, sizeof(text), "t=%lu stop=%lu left=%ld queue=%u ble=%lu usb=%lu",
+           now, stopAt, left, queueLen, bleLines, usbLines);
   reply(text);
 }
 
