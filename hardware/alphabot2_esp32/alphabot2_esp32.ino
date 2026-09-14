@@ -8,6 +8,14 @@
 #include <WebSocketsServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
+#include <opus.h>
+
+// libopus dung rat nhieu stack khi ma hoa. Task loop() cua Arduino-ESP32
+// mac dinh chi 8 KB, va opus_encode lam tran no ngay lan goi dau tien:
+//   Guru Meditation Error: Core 0 panic (LoadProhibited)
+//   Debug exception reason: Stack canary watchpoint triggered
+// 32 KB la du rong, va RAM con hon 250 KB nen khong tiec.
+SET_LOOP_TASK_STACK_SIZE(32 * 1024);
 
 
 // ============================================================

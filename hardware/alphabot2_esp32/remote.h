@@ -55,6 +55,55 @@ static const char TOOLS_JSON[] PROGMEM =
   "{\"name\":\"self.get_device_status\",\"description\":\"Get the current status of this device\","
   "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]";
 
+// --- Opus ------------------------------------------------------------------
+//
+// Firmware Xiaozhi chính thức mã hoá Opus ngay trên thiết bị
+// (audio_service.h: OPUS_FRAME_DURATION_MS 60, 16 kHz, ESP_OPUS_BITRATE_AUTO).
+// Bản này làm đúng như vậy, và đó là khác biệt giữa ~24 kbps với 256 kbps của
+// PCM thô. Ở 256 kbps đường ghi TLS của ESP32 bão hoà, bộ đệm gửi không bao giờ
+// rỗng, và mọi gói MCP xếp hàng sau audio — đo được 3.8 giây mỗi lệnh.
+//
+// Chiều xuống cũng là Opus, và ESP32 tự giải mã thành PCM cho trình duyệt:
+// trang người xem chạy ở http:// trên LAN nên không có WebCodecs. Giải mã ở đây
+// vừa giữ đường truyền gọn, vừa khỏi cần codec trong trình duyệt.
+
+OpusEncoder* opusEnc = nullptr;
+OpusDecoder* opusDec = nullptr;
+
+// Đủ rộng cho một gói 60 ms; Opus giọng nói thực tế nhỏ hơn nhiều.
+static uint8_t opusPacket[512];
+// 60 ms ở 24 kHz là 1440 mẫu; để dư cho trường hợp server đổi sample rate.
+static int16_t downPcm[2048];
+
+static void opusEncoderStart() {
+    if (opusEnc) return;
+    int err = 0;
+    opusEnc = opus_encoder_create(SAMPLE_RATE, 1, OPUS_APPLICATION_AUDIO, &err);
+    if (err != OPUS_OK || !opusEnc) {
+        Serial.print("[OPUS] khong tao duoc encoder, loi ");
+        Serial.println(err);
+        opusEnc = nullptr;
+        return;
+    }
+    Serial.println("[OPUS] encoder san sang 16 kHz mono");
+}
+
+// Decoder chỉ dựng được sau hello, vì lúc đó mới biết server phát ở tần số nào.
+static void opusDecoderStart(uint16_t rate) {
+    if (opusDec) { opus_decoder_destroy(opusDec); opusDec = nullptr; }
+    int err = 0;
+    opusDec = opus_decoder_create(rate, 1, &err);
+    if (err != OPUS_OK || !opusDec) {
+        Serial.print("[OPUS] khong tao duoc decoder, loi ");
+        Serial.println(err);
+        opusDec = nullptr;
+        return;
+    }
+    Serial.print("[OPUS] decoder san sang ");
+    Serial.print(rate);
+    Serial.println(" Hz mono");
+}
+
 // ---------------------------------------------------------------- gửi đi
 
 static void sendJson(const JsonDocument& doc) {
@@ -71,7 +120,7 @@ static void sendHello() {
     doc["transport"] = "websocket";
     doc["features"]["mcp"] = true;
     JsonObject audio = doc["audio_params"].to<JsonObject>();
-    audio["format"] = "pcm";
+    audio["format"] = "opus";
     audio["sample_rate"] = SAMPLE_RATE;
     audio["channels"] = 1;
     audio["frame_duration"] = 60;
@@ -203,6 +252,7 @@ static void handleText(uint8_t* payload, size_t len) {
     if (!strcmp(type, "hello")) {
         strlcpy(sessionId, doc["session_id"] | "", sizeof(sessionId));
         downRate = doc["audio_params"]["sample_rate"] | 24000;
+        opusDecoderStart(downRate);
         remoteReady = true;
         uplinkOpen = true;
         sendListen("start");
@@ -258,9 +308,13 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t len) {
             handleText(payload, len);
             break;
         case WStype_BIN:
-            // Gói Opus của server. ESP32 không giải mã, chỉ chuyển tiếp sang
-            // trình duyệt của người xem — WebCodecs lo phần còn lại.
-            viewerAudio(payload, len);
+            // Gói Opus của server. Giải mã ngay tại đây thành PCM: trang người
+            // xem chạy http:// trên LAN nên không có WebCodecs để tự giải mã.
+            if (opusDec && len > 0) {
+                const int samples = opus_decode(opusDec, payload, len, downPcm,
+                                                sizeof(downPcm) / sizeof(downPcm[0]), 0);
+                if (samples > 0) viewerAudio((const uint8_t*)downPcm, samples * sizeof(int16_t));
+            }
             break;
         default:
             break;
@@ -277,6 +331,7 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t len) {
 // thì quay ra ngay chứ không ngồi đợi.
 static size_t uplinkFill = 0;
 static unsigned long uplinkFrames = 0;
+static unsigned long uplinkBytes = 0;
 
 static bool pumpUplink() {
     if (!remoteReady || !uplinkOpen || !micEnabled) {
@@ -302,9 +357,14 @@ static bool pumpUplink() {
         uplinkPcm[uplinkFill++] = (int16_t)sample;
     }
     if (uplinkFill < UPLINK_SAMPLES) return false;
-    serverWs.sendBIN((uint8_t*)uplinkPcm, UPLINK_SAMPLES * sizeof(int16_t));
     uplinkFill = 0;
+    if (!opusEnc) return false;
+    const int packed = opus_encode(opusEnc, uplinkPcm, UPLINK_SAMPLES,
+                                   opusPacket, sizeof(opusPacket));
+    if (packed <= 0) return false;
+    serverWs.sendBIN(opusPacket, packed);
     uplinkFrames++;
+    uplinkBytes += packed;
 
     // Báo nhịp mỗi 5 giây kèm biên độ lớn nhất. Im lặng không phân biệt được với
     // hỏng, nên in ra cả hai: số khung đã gửi và mic có nghe thấy gì không.
@@ -316,7 +376,10 @@ static bool pumpUplink() {
             const int16_t v = uplinkPcm[i] < 0 ? -uplinkPcm[i] : uplinkPcm[i];
             if (v > peak) peak = v;
         }
-        Serial.printf("[MIC] da gui %lu khung, dinh %d/32767\n", uplinkFrames, peak);
+        // In ra kbps thuc te: day la con so quyet dinh co nghen hay khong.
+        const unsigned long kbps = uplinkBytes * 8 / 5000;
+        Serial.printf("[MIC] %lu khung, %lu kbps, dinh %d/32767\n", uplinkFrames, kbps, peak);
+        uplinkBytes = 0;
     }
     return true;
 }
@@ -344,6 +407,7 @@ void remoteBegin() {
 
     char path[128];
     snprintf(path, sizeof(path), "/xiaozhi/v1/?device-id=%s&client-id=%s", DEVICE_ID, DEVICE_ID);
+    opusEncoderStart();
     Serial.printf("[WS] noi toi %s://%s:%d%s (heap=%u)\n",
                   SERVER_TLS ? "wss" : "ws", SERVER_HOST, SERVER_PORT, path,
                   (unsigned)ESP.getFreeHeap());

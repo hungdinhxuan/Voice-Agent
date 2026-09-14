@@ -83,14 +83,13 @@ audio, trình duyệt phát bằng Web Audio, ESP32 không đụng tới codec n
 Phải bấm mới có tiếng: trình duyệt di động không cho phát âm thanh nếu chưa có
 thao tác của người dùng.
 
-**Vì sao downlink cũng là PCM.** Trang này chạy ở `http://` trên IP LAN, nên
-trình duyệt **không coi đó là secure context** — và `AudioDecoder` (WebCodecs)
-chỉ tồn tại trong secure context. Không có cách nào sửa từ phía trình duyệt:
-không phải HTTPS thì không có WebCodecs, hết. Nên thiết bị khai `format: "pcm"`
-sẽ nhận PCM ở **cả hai chiều**, và Web Audio phát thẳng.
+**Vì sao ESP32 giải mã chứ không chuyển tiếp thẳng.** Trang này chạy ở `http://`
+trên IP LAN, nên trình duyệt **không coi đó là secure context** — và
+`AudioDecoder` (WebCodecs) chỉ tồn tại trong secure context. Không sửa được từ
+phía trình duyệt: không phải HTTPS thì không có WebCodecs, hết.
 
-Băng thông không tăng như tưởng: firmware tắt mic trong lúc server nói (mục 5),
-nên hai chiều không bao giờ chạy cùng lúc. Đỉnh vẫn khoảng 256 kbps.
+Nên ESP32 giải mã Opus thành PCM rồi mới đẩy sang trình duyệt. Đường truyền ra
+internet vẫn gọn, còn chặng LAN thì thô nhưng ngắn và rẻ.
 
 ## 5. Vì sao mic tắt trong lúc server nói
 
@@ -149,7 +148,8 @@ FQBN="esp32:esp32:esp32s3:PartitionScheme=huge_app,CDCOnBoot=cdc"
 "$CLI" upload -p COMx --fqbn "$FQBN" hardware/alphabot2_esp32
 ```
 
-Thư viện cần: `Adafruit NeoPixel`, `ArduinoJson`, `WebSockets` (Links2004).
+Thư viện cần: `Adafruit NeoPixel`, `ArduinoJson`, `WebSockets` (Links2004), và
+`arduino-libopus` phải clone tay (mục 3).
 
 **Dùng `PartitionScheme=huge_app`.** Với phân vùng mặc định sketch chiếm **89%**
 flash — chạy được nhưng không còn chỗ để thêm gì. Đổi sang `huge_app` thì xuống
