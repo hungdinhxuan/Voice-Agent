@@ -104,7 +104,7 @@ ai điều khiển.
 
 ## 7. Hiệu chỉnh quãng đường
 
-Không có encoder, cm và độ quy ra thời gian chạy. Trong `motion.ino`:
+Không có encoder, cm và độ quy ra thời gian chạy. Trong `motion.h`:
 
 ```cpp
 const float MS_PER_CM     = 30.0;
@@ -143,7 +143,7 @@ gửi** — từng chuỗi JSON được chép từ `remote.h`, audio đi lên l
 `pumpUplink()` đẩy. Chạy được nó nghĩa là giao thức khớp với adapter.
 
 ```bash
-uv run --with soundfile --with websockets python     hardware/alphabot2_esp32/sim_device.py ws://127.0.0.1:8080 loi-noi.wav
+uv run --with soundfile --with websockets python \n    hardware/alphabot2_esp32/sim_device.py ws://127.0.0.1:8080 loi-noi.wav
 ```
 
 File wav phải là mono 16 kHz PCM_16. Sửa giao thức trong `remote.h` thì sửa ở
