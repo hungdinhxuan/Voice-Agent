@@ -45,9 +45,19 @@ nên ESP32 không với tới. Hai cách:
 - **LAN (khuyến nghị)** — đổi `web.host` thành `0.0.0.0` trong config, rồi trỏ
   `SERVER_HOST` vào IP LAN của máy. Nhanh nhất, không cần TLS. Đổi lại server
   mở ra toàn mạng nội bộ và **không có xác thực**.
-- **Qua tunnel** — `SERVER_HOST "voiceagent.hungdx.com"`, `SERVER_PORT 443`,
-  `SERVER_TLS 1`. Đi được từ bất cứ đâu nhưng thêm độ trễ, và uplink PCM ~256
-  kbps đi vòng ra internet rồi quay lại.
+- **Qua tunnel (đang dùng)** — `SERVER_HOST "voiceagent.hungdx.com"`,
+  `SERVER_PORT 443`, `SERVER_TLS 1`. Đi được từ bất cứ đâu nhưng thêm độ trễ, và
+  uplink PCM ~256 kbps đi vòng ra internet rồi quay lại.
+
+  Lưu ý: `beginSSL` không kèm CA thì thư viện gọi `setInsecure()`. Đường truyền
+  **được mã hoá nhưng ESP32 không xác minh danh tính server** — nó sẽ tin bất cứ
+  ai trả lời ở địa chỉ đó. Muốn chặt hơn thì dùng `beginSslWithCA` kèm chứng chỉ
+  gốc của Cloudflare.
+
+Đường LAN hiện **không dùng được nếu không đặt token**: `app/config.py` từ chối
+bind ra ngoài loopback khi thiếu `web.access_token` và `xiaozhi.access_token`
+(mỗi cái tối thiểu 16 ký tự). Chốt này có chủ đích — đừng gỡ, hãy đặt token rồi
+gửi kèm trong query nếu muốn chạy LAN.
 
 ## 3. Vì sao uplink là PCM chứ không phải Opus
 
@@ -125,7 +135,7 @@ MS_PER_CM_mới = MS_PER_CM_cũ × (100 ÷ quãng đường đo được)
 
 ```bash
 CLI="/c/Program Files/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"
-FQBN="esp32:esp32:esp32s3:PartitionScheme=huge_app"
+FQBN="esp32:esp32:esp32s3:PartitionScheme=huge_app,CDCOnBoot=cdc"
 "$CLI" compile --fqbn "$FQBN" hardware/alphabot2_esp32
 "$CLI" upload -p COMx --fqbn "$FQBN" hardware/alphabot2_esp32
 ```
@@ -135,6 +145,16 @@ Thư viện cần: `Adafruit NeoPixel`, `ArduinoJson`, `WebSockets` (Links2004).
 **Dùng `PartitionScheme=huge_app`.** Với phân vùng mặc định sketch chiếm **89%**
 flash — chạy được nhưng không còn chỗ để thêm gì. Đổi sang `huge_app` thì xuống
 **37%**. Trong Arduino IDE: Tools → Partition Scheme → *Huge APP (3MB No OTA)*.
+
+**Dùng `CDCOnBoot=cdc`.** ESP32-S3 mặc định tắt USB CDC, và khi đó `Serial.print`
+đi ra chân UART chứ không ra cổng USB — Serial Monitor sẽ **im hoàn toàn** dù
+firmware chạy bình thường. Trong Arduino IDE: Tools → USB CDC On Boot → *Enabled*.
+
+Muốn xem thư viện WebSocket nói gì khi bắt tay, thêm:
+
+```bash
+--build-property "compiler.cpp.extra_flags=-DDEBUG_ESP_PORT=Serial"
+```
 
 ## 8b. Kiểm chứng giao thức mà không cần phần cứng
 
@@ -166,6 +186,11 @@ trả lời            : 'Đã rẽ phải chín mươi độ và đi thẳng ha
   chuyển chế độ — tất cả mới chỉ được biên dịch. Coi như chưa kiểm chứng cho tới
   khi bạn nạp và thấy nó hoạt động.
 - Lần đầu chạy hãy mở Serial Monitor ở 115200 — mọi bước bắt tay đều in ra đó.
+- Thư viện WebSocket mặc định gửi kèm header `Origin: file://`, và chốt chặn
+  Origin của adapter trả **403** cho nó. Firmware gọi `setExtraHeaders("")` để bỏ
+  hẳn header đó — thiết bị Xiaozhi thật không gửi Origin bao giờ. Sửa ở firmware
+  chứ không nới chốt chặn, vì chốt đó đang ngăn trình duyệt ở site khác mở trộm
+  WebSocket.
 - Chỉ một session mỗi robot. Nhiều người xem cùng lúc thì được.
 - `MIC_GAIN` đang là 3.0, lấy theo chế độ local. ASR có thể cần giá trị khác;
   nếu nhận dạng kém, đây là số đầu tiên nên chỉnh.

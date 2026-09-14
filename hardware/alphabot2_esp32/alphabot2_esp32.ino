@@ -166,13 +166,18 @@ float SOUND_THRESHOLD_MULTIPLIER = 2.0f;
 //   3. Uplink la PCM tho ~256 kbps. Dung trong LAN. Dung chay qua ket noi
 //      tinh theo dung luong.
 
-#define WIFI_SSID     "doi-ten-wifi"
+#define WIFI_SSID     "hung"
 #define WIFI_PASS     "doi-mat-khau"
 
-// Dung IP LAN cua may chay server, khong phai 127.0.0.1.
-#define SERVER_HOST   "192.168.0.204"
-#define SERVER_PORT   8080
-#define SERVER_TLS    0          // 1 neu di qua tunnel https
+// Server chi bind 127.0.0.1 va tu choi bind ra LAN neu khong co token, nen
+// duong dang dung la qua tunnel. Muon chay thang trong LAN thi phai dat
+// web.access_token va xiaozhi.access_token roi gui token kem theo.
+//
+// Luu y: beginSSL khong kem chung chi nghia la thu vien goi setInsecure() -
+// duong truyen duoc ma hoa nhung ESP32 KHONG xac minh danh tinh server.
+#define SERVER_HOST   "voiceagent.hungdx.com"
+#define SERVER_PORT   443
+#define SERVER_TLS    1          // 0 neu noi thang trong LAN
 
 #define DEVICE_ID     "alphabot2"
 

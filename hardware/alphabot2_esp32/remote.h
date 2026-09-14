@@ -243,8 +243,11 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t len) {
             remoteLinked = true;
             sendHello();
             break;
+        case WStype_ERROR:
+            Serial.printf("[WS] error: %.*s\n", (int)len, (const char*)payload);
+            break;
         case WStype_DISCONNECTED:
-            Serial.println("[WS] disconnected");
+            Serial.printf("[WS] disconnected (heap=%u)\n", (unsigned)ESP.getFreeHeap());
             remoteLinked = false;
             remoteReady = false;
             uplinkOpen = false;
@@ -321,11 +324,19 @@ void remoteBegin() {
 
     char path[128];
     snprintf(path, sizeof(path), "/xiaozhi/v1/?device-id=%s&client-id=%s", DEVICE_ID, DEVICE_ID);
+    Serial.printf("[WS] noi toi %s://%s:%d%s (heap=%u)\n",
+                  SERVER_TLS ? "wss" : "ws", SERVER_HOST, SERVER_PORT, path,
+                  (unsigned)ESP.getFreeHeap());
 #if SERVER_TLS
     serverWs.beginSSL(SERVER_HOST, SERVER_PORT, path);
 #else
     serverWs.begin(SERVER_HOST, SERVER_PORT, path);
 #endif
+    // Thu vien mac dinh gui kem "Origin: file://" va server tu choi bang 403:
+    // chot chan Origin sinh ra de chan trinh duyet o site khac mo WebSocket
+    // trom. Thiet bi ESP32 that khong gui Origin bao gio, nen bo han di - dung
+    // hon la noi long chot chan o phia server.
+    serverWs.setExtraHeaders("");
     serverWs.onEvent(onWsEvent);
     serverWs.setReconnectInterval(LINK_RETRY_MS);
     viewerBegin(DEVICE_ID);
