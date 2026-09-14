@@ -9,3 +9,6 @@ models/
 
 # Credential cua thiet bi - chep secrets.example.h thanh secrets.h
 hardware/*/secrets.h
+
+# Cau hinh cua may ban, script setup-and-run tao ra tu config.yaml
+config.local.yaml
