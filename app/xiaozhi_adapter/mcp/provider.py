@@ -27,11 +27,15 @@ class DeviceToolProvider:
         client: DeviceMcpClient,
         *,
         log: Logger | None = None,
+        owner_device_id: str = "",
     ) -> None:
         self._client = client
         self._catalog = DeviceToolCatalog()
         self._log = log or (lambda message, level: None)
         self.ready = False
+        # Which device these tools actually run on. A borrowing session reports
+        # it so a snapshot says whose wheels a call would turn.
+        self.owner_device_id = owner_device_id
 
     @property
     def catalog(self) -> DeviceToolCatalog:

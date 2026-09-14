@@ -128,10 +128,16 @@ function connect() {
   url.searchParams.set('client-id', 'xiaozhi-console');
   const token = $('token').value.trim();
   if (token) url.searchParams.set('token', token);
+  // Mượn tool của một thiết bị khác: mic ở đây, bánh xe ở chỗ nó.
+  const control = $('control').value.trim();
+  if (control) url.searchParams.set('control', control);
 
   setConn('Đang kết nối…');
   setState('connecting');
-  note(`Mở WebSocket tới ${url.pathname} (device-id và token đi qua query param).`);
+  note(control
+    ? `Mở WebSocket tới ${url.pathname}, và mượn tool của thiết bị "${control}" — `
+      + 'tool call sẽ đi xuống nó chứ không xuống cổng USB/BLE ở đây.'
+    : `Mở WebSocket tới ${url.pathname} (device-id và token đi qua query param).`);
 
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';

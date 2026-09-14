@@ -13,6 +13,7 @@ from app.xiaozhi_adapter import logging as adapter_logging
 from app.xiaozhi_adapter.logging import LOGGER
 from app.xiaozhi_adapter.protocol import messages as protocol
 from app.xiaozhi_adapter.protocol.messages import ClientHello, ProtocolError
+from app.xiaozhi_adapter.mcp.provider import DeviceToolProvider
 from app.xiaozhi_adapter.session.device_session import DeviceSession
 
 
@@ -54,6 +55,19 @@ class DeviceSessionRegistry:
 
     def snapshots(self) -> list[dict[str, Any]]:
         return [session.snapshot() for session in self._sessions.values()]
+
+    def tools_of(self, device_id: str) -> DeviceToolProvider | None:
+        """The live tool provider of another connected device, if it has one.
+
+        Returns None when that device is absent or has not finished its MCP
+        handshake, so the borrower falls back to its own tools rather than
+        holding a provider that answers nothing.
+        """
+
+        for session in self._sessions.values():
+            if session.device_id == device_id and session.tools_ready:
+                return session.tools
+        return None
 
 
 class WebSocketTransport:
@@ -121,12 +135,17 @@ async def _handle_device(websocket: WebSocket, app: FastAPI, config: AppConfig) 
     client_id = headers.get("client-id") or websocket.query_params.get("client-id") or ""
     await websocket.accept()
 
+    # `?control=<device-id>` lets a browser speak for a robot: the console has a
+    # microphone because it is served over HTTPS, the robot's own page cannot be.
+    controls = websocket.query_params.get("control") or ""
+    devices: DeviceSessionRegistry = app.state.xiaozhi_sessions
     session = DeviceSession(
         config,
         app.state.runtime,
         WebSocketTransport(websocket),
         device_id=device_id,
         client_id=client_id,
+        borrow_tools=(lambda: devices.tools_of(controls)) if controls else None,
     )
     try:
         hello = await _await_hello(websocket)

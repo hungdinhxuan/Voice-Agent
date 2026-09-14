@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, Protocol
 
@@ -76,6 +77,7 @@ class DeviceSession:
         *,
         device_id: str,
         client_id: str,
+        borrow_tools: Callable[[], DeviceToolProvider | None] | None = None,
     ) -> None:
         self.config = config
         self.settings = config.xiaozhi
@@ -83,6 +85,10 @@ class DeviceSession:
         self.transport = transport
         self.device_id = device_id
         self.client_id = client_id
+        # Resolved at handshake time, not now: the device being borrowed from may
+        # connect after this session does.
+        self._borrow_tools = borrow_tools
+        self.borrowed_from: str | None = None
         self.session_id = uuid.uuid4().hex
         self.connected_at = time.time()
         self.hello: ClientHello | None = None
@@ -104,6 +110,25 @@ class DeviceSession:
         self._turn_started_at: float | None = None
         self._speech_end_at: float | None = None
         self._closed = False
+
+    @property
+    def tools(self) -> DeviceToolProvider | None:
+        return self._tools
+
+    @property
+    def tools_ready(self) -> bool:
+        """Whether another session could usefully borrow these tools.
+
+        A session that borrowed its own tools is excluded: lending them on would
+        build a chain that outlives the device actually holding the socket.
+        """
+
+        return (
+            self._tools is not None
+            and self._tools.ready
+            and self.borrowed_from is None
+            and not self._closed
+        )
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -127,13 +152,24 @@ class DeviceSession:
 
         await self.runtime.load_language(self.settings.language)
 
-        if hello.supports_mcp and self.settings.mcp_enabled:
+        # A browser can drive a robot it is not: the console runs over HTTPS and
+        # so has a microphone, while the robot's own page - plain HTTP on a LAN
+        # address - can never ask for one. Borrowing the robot's tools puts the
+        # speaking and the moving in different places on purpose.
+        borrowed = self._borrow_tools() if self._borrow_tools is not None else None
+        if borrowed is not None:
+            self._tools = borrowed
+            self.borrowed_from = borrowed.owner_device_id
+            self.log.event("tools_borrowed", owner=self.borrowed_from, count=len(borrowed.catalog))
+        elif hello.supports_mcp and self.settings.mcp_enabled:
             self._mcp = DeviceMcpClient(
                 self._send_mcp_payload,
                 timeout=self.settings.mcp_timeout_seconds,
                 on_notification=self._on_mcp_notification,
             )
-            self._tools = DeviceToolProvider(self._mcp, log=self.log.message)
+            self._tools = DeviceToolProvider(
+                self._mcp, log=self.log.message, owner_device_id=self.device_id
+            )
 
         self._uplink = UplinkPipeline(
             agent_sample_rate=self.config.audio.sample_rate,
@@ -197,7 +233,9 @@ class DeviceSession:
         )
 
         self._spawn(self._pump_agent_events(), "xiaozhi-events")
-        if self._tools is not None:
+        # Borrowed tools are already live on their owner's socket; starting the
+        # handshake again would send `initialize` down the wrong connection.
+        if self._tools is not None and self.borrowed_from is None:
             self._spawn(self._tools.start(), "xiaozhi-mcp-init")
 
     async def close(self) -> None:
@@ -440,6 +478,7 @@ class DeviceSession:
             "protocol_version": self.hello.version if self.hello is not None else None,
             "downlink_sample_rate": self.audio_params.sample_rate,
             "frame_duration_ms": self.audio_params.frame_duration_ms,
+            "borrowed_from": self.borrowed_from,
             "mcp_ready": self._tools.ready if self._tools is not None else False,
             "mcp_tools": len(self._tools.catalog) if self._tools is not None else 0,
             "mcp_pending": self._mcp.pending_count if self._mcp is not None else 0,

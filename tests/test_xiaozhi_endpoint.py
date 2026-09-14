@@ -56,11 +56,23 @@ class StubDeviceSession:
 
     instances: list["StubDeviceSession"] = []
 
-    def __init__(self, config, runtime, transport, *, device_id: str, client_id: str) -> None:
+    def __init__(
+        self,
+        config,
+        runtime,
+        transport,
+        *,
+        device_id: str,
+        client_id: str,
+        borrow_tools=None,
+    ) -> None:
         del config, runtime
         self.transport = transport
         self.device_id = device_id
         self.client_id = client_id
+        # Kept so a test can see whether the endpoint offered a lender at all,
+        # and what it would have resolved to.
+        self.borrow_tools = borrow_tools
         self.session_id = f"stub-{len(StubDeviceSession.instances)}"
         self.hello = None
         self.texts: list[str] = []
@@ -528,3 +540,81 @@ def test_the_api_reports_connected_devices() -> None:
     assert body["path"] == "/xiaozhi/v1/"
     assert body["protocol_version"] == 1
     assert body["devices"] == [{"session_id": "stub-0", "device_id": "d1"}]
+
+
+# ------------------------------------------------- mượn tool của thiết bị khác
+
+
+class _LentTools:
+    """Đủ giống DeviceToolProvider để registry chấp nhận cho mượn."""
+
+    def __init__(self, owner: str, ready: bool = True) -> None:
+        self.owner_device_id = owner
+        self.ready = ready
+        self.catalog = ["self.chassis.forward"]
+
+
+class _LenderSession:
+    def __init__(self, device_id: str, *, ready: bool = True, borrowed: bool = False) -> None:
+        self.device_id = device_id
+        self.session_id = f"lender-{device_id}"
+        self._tools = _LentTools(device_id, ready)
+        self.borrowed_from = device_id if borrowed else None
+        self._closed = False
+
+    @property
+    def tools(self):
+        return self._tools
+
+    @property
+    def tools_ready(self) -> bool:
+        return self._tools.ready and self.borrowed_from is None and not self._closed
+
+
+def test_a_session_can_borrow_a_connected_device_tools() -> None:
+    _, registry, _ = build_app()
+    registry.add(_LenderSession("alphabot2"))
+    lent = registry.tools_of("alphabot2")
+    assert lent is not None
+    assert lent.owner_device_id == "alphabot2"
+
+
+def test_borrowing_an_absent_or_unready_device_yields_nothing() -> None:
+    """The borrower must fall back to its own tools rather than hold a provider
+    that answers nothing."""
+
+    _, registry, _ = build_app()
+    assert registry.tools_of("alphabot2") is None
+
+    registry.add(_LenderSession("alphabot2", ready=False))
+    assert registry.tools_of("alphabot2") is None
+
+
+def test_tools_are_not_lent_on_a_second_time() -> None:
+    """A session that itself borrowed must not lend: the chain would outlive the
+    device actually holding the socket."""
+
+    _, registry, _ = build_app()
+    registry.add(_LenderSession("browser:console", borrowed=True))
+    assert registry.tools_of("browser:console") is None
+
+
+def test_the_control_parameter_offers_a_lender_to_the_session(stub_sessions) -> None:
+    app, registry, _ = build_app()
+    registry.add(_LenderSession("alphabot2"))
+    with TestClient(app).websocket_connect(
+        "/xiaozhi/v1/?device-id=browser%3Aconsole&control=alphabot2"
+    ) as socket:
+        socket.send_text(json.dumps(HELLO))
+        socket.receive_json()
+    session = stub_sessions[-1]
+    assert session.borrow_tools is not None
+    assert session.borrow_tools().owner_device_id == "alphabot2"
+
+
+def test_without_the_control_parameter_no_lender_is_offered(stub_sessions) -> None:
+    app, _, _ = build_app()
+    with TestClient(app).websocket_connect("/xiaozhi/v1/?device-id=browser%3Aconsole") as socket:
+        socket.send_text(json.dumps(HELLO))
+        socket.receive_json()
+    assert stub_sessions[-1].borrow_tools is None

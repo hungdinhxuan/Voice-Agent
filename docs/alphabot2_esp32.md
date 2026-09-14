@@ -186,6 +186,25 @@ lệnh xuống bánh xe : ['R90', 'F20']
 trả lời            : 'Đã rẽ phải chín mươi độ và đi thẳng hai mươi phân.'
 ```
 
+## 8c. Nói vào mic của trình duyệt thay vì mic robot
+
+Trang do robot phục vụ chạy ở `http://` trên IP LAN, nên **không xin được mic**:
+`getUserMedia` cũng chỉ tồn tại trong secure context, y hệt `AudioDecoder`. Không
+sửa được từ phía trình duyệt.
+
+Đường đi được là mượn tool: console tại `https://<domain>/xiaozhi` có mic vì nó
+chạy trên HTTPS, và nó mượn tool của robot để lệnh đi xuống đúng chỗ.
+
+1. Mở `https://<domain>/xiaozhi`, điền `alphabot2` vào ô **Điều khiển robot**.
+2. Bấm **Kết nối** → **listen start** → **Bật microphone**.
+3. Nói vào mic máy đang mở trang. Tool call đi thẳng xuống robot ESP32.
+
+Robot phải đang nối sẵn và đã xong bắt tay MCP, nếu không console dùng tool giả
+lập của chính nó. `/api/xiaozhi` có trường `borrowed_from` cho biết phiên nào
+đang mượn của ai.
+
+Mic của robot vẫn chạy song song. Muốn im thì tắt `ENABLE_REMOTE`, hoặc bịt mic.
+
 ## 9. Giới hạn
 
 - **Chưa chạy thử trên phần cứng thật.** Sketch compile được, và giao thức đã

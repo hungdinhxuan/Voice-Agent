@@ -38,6 +38,12 @@
           <label class="check"><input id="feat-aec" type="checkbox"> <span><code>features.aec</code> — server-side AEC</span></label>
           <label class="check"><input id="user-tool" type="checkbox"> <span>Thêm một user-only tool (<code>self.reboot</code>)</span></label>
           <label class="row"><span>Access token</span><input id="token" type="password" placeholder="để trống nếu không bật"></label>
+          <label class="row"><span>Điều khiển robot</span>
+            <input id="control" type="text" placeholder="device-id, vd alphabot2 — để trống thì dùng tool giả lập">
+          </label>
+          <p class="hint">Điền vào đây thì tool call đi thẳng xuống con robot đó thay vì
+            xuống cổng USB/BLE. Dùng khi muốn nói vào mic của máy này mà robot ở nơi khác
+            chạy — trang do robot tự phục vụ không xin được mic vì nó không phải HTTPS.</p>
         </article>
 
         <article class="card">
