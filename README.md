@@ -117,6 +117,31 @@ Nếu model nằm ngoài cache chuẩn, đặt đường dẫn cục bộ vào `
 
 ## Chạy
 
+### Một lệnh duy nhất
+
+Nháy đúp **`run.cmd`**, hoặc:
+
+```powershell
+.\scripts\setup-and-run.ps1
+```
+
+Script kiểm tra `uv`, đồng bộ thư viện, bật Ollama nếu chưa chạy, tải model LLM và
+ASR nếu thiếu, tạo `config.local.yaml` từ `config.yaml` rồi bật server. Mọi bước
+đều kiểm tra trước khi làm, nên chạy lại nhiều lần vô hại.
+
+| Cờ | Tác dụng |
+| --- | --- |
+| `-SkipSetup` | Bỏ mọi kiểm tra, bật server luôn |
+| `-NoXiaozhi` | Không bật adapter cho thiết bị ESP32 |
+| `-ConfigPath <file>` | Dùng config khác |
+
+`config.local.yaml` là cấu hình của máy bạn và **không được commit**. Sửa nó chứ
+đừng sửa `config.yaml` — đó là bản dùng chung. Trước đây hai file cấu hình lệch
+nhau đã làm `/xiaozhi` trả 404 mà không rõ nguyên nhân.
+
+### Chạy tay
+
+
 Liệt kê thiết bị:
 
 ```bash
@@ -236,6 +261,8 @@ xiaozhi:
 ```
 
 Trỏ thiết bị vào `ws://<IP LAN>:8080/xiaozhi/v1/` với `version = 1`. Xem `GET /api/xiaozhi` để biết thiết bị đang kết nối, audio params đã thương lượng và trạng thái MCP.
+
+Mở `/xiaozhi` để có console giả lập thiết bị ngay trong trình duyệt: nó nói đúng nửa client của giao thức, hiện từng frame thật trên socket kèm giải thích, tự đóng vai MCP server, và với Chrome/Edge thì mã hóa Opus từ microphone để chạy trọn một lượt hội thoại. Dùng để hiểu giao thức và test khi chưa có phần cứng.
 
 Hỗ trợ: protocol version 1, hội thoại half-duplex, uplink Opus 16 kHz/60 ms, downlink Opus 24 kHz/60 ms có pacing, barge-in, và device MCP (thiết bị là MCP server, adapter là client) để LLM gọi tool trên thiết bị.
 

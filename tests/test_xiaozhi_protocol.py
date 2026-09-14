@@ -62,7 +62,9 @@ def test_hello_without_features_reports_no_mcp() -> None:
     [
         {"version": "1"},
         {"transport": "mqtt"},
-        {"audio_params": {"format": "pcm", "sample_rate": 16000, "channels": 1}},
+        # "pcm" used to belong here and is now supported on purpose, for DIY
+        # devices with no Opus encoder. See test_xiaozhi_audio.py.
+        {"audio_params": {"format": "mp3", "sample_rate": 16000, "channels": 1}},
         {"audio_params": {"format": "opus", "channels": 2}},
         {"audio_params": "opus"},
     ],

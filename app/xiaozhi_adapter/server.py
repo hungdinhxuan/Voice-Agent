@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -94,10 +95,9 @@ async def _handle_device(websocket: WebSocket, app: FastAPI, config: AppConfig) 
     registry: DeviceSessionRegistry = app.state.xiaozhi_sessions
     headers = websocket.headers
 
-    # An ESP32 never sends Origin; a browser always does. Anything that looks
-    # like a page rather than a device has to be explicitly allowed.
     origin = headers.get("origin")
-    if origin is not None and origin not in config.web.allowed_origins:
+    if not _origin_allowed(origin, headers.get("host"), config):
+        LOGGER.warning("Từ chối Origin %s cho thiết bị Xiaozhi.", origin)
         await websocket.close(code=CLOSE_UNAUTHORIZED)
         return
     if not _authorized(
@@ -185,6 +185,29 @@ async def _receive_loop(websocket: WebSocket, session: DeviceSession) -> None:
                 await session.handle_text(raw)
     except WebSocketDisconnect:
         return
+
+
+def _origin_allowed(origin: str | None, host: str | None, config: AppConfig) -> bool:
+    """Decide whether a page may open a device session.
+
+    An ESP32 never sends `Origin`, so a request that has one is a browser. The
+    risk is a drive-by: WebSocket ignores CORS, so any site could otherwise open
+    a session against a server on the visitor's network. Same-origin is allowed
+    because the device console at `/xiaozhi` is served by this server and has to
+    reach this endpoint.
+
+    Only the host is compared. Behind a reverse proxy the browser sees `https`
+    while the app sees a plain `http` connection, so matching the scheme as well
+    would reject the console whenever a tunnel is in front.
+    """
+
+    if origin is None:
+        return True
+    if origin in config.web.allowed_origins:
+        return True
+    if not host:
+        return False
+    return urlsplit(origin).netloc == host
 
 
 def _authorized(expected: str | None, authorization: str | None, query_token: str | None) -> bool:

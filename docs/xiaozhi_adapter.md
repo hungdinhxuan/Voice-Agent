@@ -258,6 +258,21 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/api/xiaozhi
 ```
 
+### The device console
+
+`http://127.0.0.1:8080/xiaozhi` (only registered while the adapter is enabled) is a
+browser stand-in for an ESP32. It speaks the client half of the protocol against the
+real endpoint, so it is a test client and a way to read the protocol at the same time:
+every frame becomes a row with its raw JSON and a note on why that message exists,
+binary frames collapse into a counter with the measured inter-frame gap, and audio that
+arrives while the device is not Speaking is flagged because the firmware would drop it.
+It also answers `initialize`, `tools/list` and `tools/call` as the device's MCP server.
+
+With WebCodecs (Chrome, Edge) the page encodes genuine Opus at 16 kHz/60 ms from the
+microphone, so a full turn can be driven by speaking into it. Browsers cannot set
+WebSocket headers, so it passes `device-id` and `token` as query parameters — the same
+fallback the reference backend offers.
+
 Structured logs carry `device_id`, `session_id` and `turn_id` on every line, plus the
 MCP request id where relevant. Transcript lines record a character count, never the
 text, and microphone audio, Opus payloads and tokens are never logged.

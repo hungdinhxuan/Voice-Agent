@@ -7,6 +7,12 @@ from typing import Any
 
 TRANSPORT = "websocket"
 AUDIO_FORMAT = "opus"
+# Official firmware only ever sends Opus. A DIY ESP32 that would otherwise need
+# an Opus encoder on-device may declare raw little-endian 16-bit PCM instead and
+# skip the codec entirely; it costs about ten times the uplink bandwidth, which
+# is affordable on a LAN and not on a metered link.
+PCM_FORMAT = "pcm"
+SUPPORTED_UPLINK_FORMATS = (AUDIO_FORMAT, PCM_FORMAT)
 
 
 class ProtocolError(ValueError):
@@ -124,7 +130,7 @@ def _parse_hello(message: dict[str, Any]) -> ClientHello:
     if not isinstance(raw_audio, dict):
         raise ProtocolError("hello.audio_params phải là JSON object.")
     audio_format = raw_audio.get("format")
-    if audio_format != AUDIO_FORMAT:
+    if audio_format not in SUPPORTED_UPLINK_FORMATS:
         raise ProtocolError(f"hello.audio_params.format không được hỗ trợ: {audio_format}")
     channels = raw_audio.get("channels", 1)
     if channels != 1:

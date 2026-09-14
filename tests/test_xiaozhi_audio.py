@@ -277,3 +277,69 @@ async def test_submit_applies_backpressure_instead_of_dropping_audio() -> None:
     release.set()
     await asyncio.wait_for(blocked, 2.0)
     await pacer.close()
+
+
+def test_uplink_accepts_raw_pcm_from_a_device_without_an_opus_encoder() -> None:
+    """A DIY ESP32 may declare `pcm` and skip the codec. Same resampling and
+    re-blocking afterwards, so only the bytes-to-floats step differs."""
+
+    import numpy as np
+
+    from app.xiaozhi_adapter.audio.pipeline import UplinkPipeline
+
+    pipeline = UplinkPipeline(
+        agent_sample_rate=16000,
+        agent_block_size=512,
+        source_format="pcm",
+        device_sample_rate=16000,
+    )
+    # 60 ms at 16 kHz, the frame an ESP32 reads out of I2S in one go.
+    samples = (np.sin(np.arange(960) * 0.1) * 20000).astype("<i2")
+    frames = pipeline.push(samples.tobytes())
+    assert frames, "960 mẫu vào phải ra được ít nhất một block 512"
+    assert all(frame.shape == (512,) for frame in frames)
+    assert all(frame.dtype == np.float32 for frame in frames)
+    assert max(abs(float(frame.max())) for frame in frames) > 0.1
+    pipeline.close()
+
+
+def test_uplink_pcm_survives_a_truncated_frame() -> None:
+    """An odd byte count means a cut-off frame; losing half a sample must not
+    kill the session."""
+
+    from app.xiaozhi_adapter.audio.pipeline import UplinkPipeline
+
+    pipeline = UplinkPipeline(
+        agent_sample_rate=16000, agent_block_size=512,
+        source_format="pcm", device_sample_rate=16000,
+    )
+    assert pipeline.push(b"\x00") == []
+    assert pipeline.push(b"") == []
+    pipeline.close()
+
+
+def test_hello_accepts_pcm_and_still_rejects_nonsense() -> None:
+    import json
+
+    import pytest
+
+    from app.xiaozhi_adapter.protocol.messages import ProtocolError, parse_client_message
+
+    def hello_with(audio: dict) -> dict:
+        return {"type": "hello", "version": 1, "transport": "websocket", "audio_params": audio}
+
+    hello = parse_client_message(
+        json.dumps(hello_with({"format": "pcm", "sample_rate": 16000,
+                               "channels": 1, "frame_duration": 60}))
+    )
+    assert hello.audio.format == "pcm"
+    assert hello.audio.sample_rate == 16000
+
+    opus = parse_client_message(
+        json.dumps(hello_with({"format": "opus", "sample_rate": 16000,
+                               "channels": 1, "frame_duration": 60}))
+    )
+    assert opus.audio.format == "opus"
+
+    with pytest.raises(ProtocolError):
+        parse_client_message(json.dumps(hello_with({"format": "mp3", "sample_rate": 16000})))

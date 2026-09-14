@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xiaozhi Device Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/xiaozhi.css">
+</head>
+<body class="xz">
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">XIAOZHI · ESP32 · GIẢ LẬP THIẾT BỊ</p>
+        <h1>Device Console</h1>
+      </div>
+      <div class="topbar-actions">
+        <div class="connection"><span id="dot"></span><span id="conn">Chưa kết nối</span></div>
+        <button id="connect" type="button">Kết nối</button>
+      </div>
+    </header>
+
+    <p class="lede">
+      Trang này đóng vai một thiết bị <code>78/xiaozhi-esp32</code>: nó nói đúng nửa client của
+      giao thức và hiển thị từng message đi qua socket. Dùng để hiểu luồng giao tiếp và để test
+      server mà không cần phần cứng.
+    </p>
+
+    <section class="grid">
+      <div class="col-left">
+        <article class="card">
+          <h2>1 · Thiết bị khai báo gì</h2>
+          <p class="hint">Gửi trong <code>hello</code> ngay sau khi socket mở. Server dựa vào đây để quyết định.</p>
+          <label class="row"><span>Protocol-Version</span>
+            <select id="version"><option value="1">1 — raw Opus</option><option value="3">3 — có header</option></select>
+          </label>
+          <label class="check"><input id="feat-mcp" type="checkbox" checked> <span><code>features.mcp</code> — thiết bị có MCP server</span></label>
+          <label class="check"><input id="feat-aec" type="checkbox"> <span><code>features.aec</code> — server-side AEC</span></label>
+          <label class="check"><input id="user-tool" type="checkbox"> <span>Thêm một user-only tool (<code>self.reboot</code>)</span></label>
+          <label class="row"><span>Access token</span><input id="token" type="password" placeholder="để trống nếu không bật"></label>
+        </article>
+
+        <article class="card">
+          <h2>2 · Thiết bị làm gì</h2>
+          <p class="hint">Đúng những nút mà firmware bấm: nút trên robot, wake word, nhả nút.</p>
+          <div class="buttons">
+            <button id="listen-start" type="button" disabled>listen start</button>
+            <select id="mode" disabled>
+              <option value="auto">auto — server tự cắt câu</option>
+              <option value="manual">manual — nhấn giữ</option>
+              <option value="realtime">realtime — có AEC</option>
+            </select>
+            <button id="listen-stop" type="button" disabled>listen stop</button>
+            <button id="wake" type="button" disabled>wake word</button>
+            <button id="abort" class="danger" type="button" disabled>abort (ngắt lời)</button>
+          </div>
+          <hr>
+          <div class="buttons">
+            <button id="mic" type="button" disabled>Bật microphone</button>
+            <label class="check"><input id="play" type="checkbox" checked> <span>Phát audio server gửi về</span></label>
+          </div>
+          <p id="mic-note" class="hint"></p>
+        </article>
+
+        <article class="card">
+          <h2>3 · Robot qua Bluetooth</h2>
+          <p class="hint">Trình duyệt cầm luôn hai đầu: WebSocket ra server, và một đường xuống
+            robot. Khi LLM gọi <code>tools/call</code>, lệnh được dịch thành một dòng lệnh gửi
+            xuống. <b>BLE</b> cho module BLE (HM-10, AT-09). <b>USB</b> cho cáp cắm thẳng, và cũng
+            mở được cổng COM ảo mà Windows tạo ra khi pair module classic như HC-05.</p>
+          <div class="buttons">
+            <button id="ble" type="button">Kết nối robot (BLE)</button>
+            <button id="usb" type="button">hoặc qua USB</button>
+            <span id="ble-state" class="ble-state">chưa kết nối</span>
+          </div>
+          <label class="row"><span>Profile UART</span>
+            <select id="ble-profile">
+              <option value="auto">tự dò (Nordic, HM-10)</option>
+              <option value="nordic">Nordic UART</option>
+              <option value="hm10">HM-10 / AT-09</option>
+              <option value="custom">UUID tự nhập</option>
+            </select>
+          </label>
+          <label class="row" id="custom-row" hidden><span>service / write UUID</span>
+            <input id="ble-uuid" type="text" placeholder="service,write">
+          </label>
+          <div class="buttons">
+            <button class="tiny" data-cmd="F20" type="button" disabled>F20</button>
+            <button class="tiny" data-cmd="B20" type="button" disabled>B20</button>
+            <button class="tiny" data-cmd="L90" type="button" disabled>L90</button>
+            <button class="tiny" data-cmd="R90" type="button" disabled>R90</button>
+            <button class="tiny" data-cmd="S" type="button" disabled>STOP</button>
+          </div>
+          <p class="hint">Bấm tay để thử dây trước khi thử bằng giọng nói. Lệnh cuối:
+            <code id="ble-last">—</code></p>
+        </article>
+
+        <article class="card">
+          <h2>4 · Thiết bị đang ở state nào</h2>
+          <p class="hint">Firmware sở hữu state machine này. Server chỉ tác động gián tiếp qua <code>tts start</code> / <code>tts stop</code>.</p>
+          <div id="states" class="states">
+            <div class="state" data-state="idle"><b>idle</b><small>chờ</small></div>
+            <div class="state" data-state="connecting"><b>connecting</b><small>đang mở channel</small></div>
+            <div class="state" data-state="listening"><b>listening</b><small>gửi mic lên</small></div>
+            <div class="state" data-state="speaking"><b>speaking</b><small>nhận audio về</small></div>
+          </div>
+          <p id="state-why" class="why">Chưa kết nối.</p>
+        </article>
+
+        <article class="card">
+          <h2>5 · Đàm phán audio</h2>
+          <table class="kv">
+            <tr><th>Uplink (mic)</th><td id="up">Opus 16000 Hz · 1ch · 60 ms</td></tr>
+            <tr><th>Downlink (loa)</th><td id="down">—</td></tr>
+            <tr><th>session_id</th><td id="sid">—</td></tr>
+            <tr><th>Frame nhận</th><td id="frames">0</td></tr>
+            <tr><th>Nhịp trung bình</th><td id="gap">—</td></tr>
+            <tr><th>Đệm thiết bị thật</th><td id="budget">20 gói ≈ 1.2 s</td></tr>
+          </table>
+          <p class="hint">Nhịp phải bám sát frame duration. Thiết bị thật chỉ giữ được
+          <code>1200 / frame_duration</code> gói rồi <b>drop không báo</b>.</p>
+        </article>
+      </div>
+
+      <div class="col-right">
+        <article class="card flow-card">
+          <div class="section-head">
+            <div><p class="label">Luồng message</p><h2>Socket đang nói gì</h2></div>
+            <div class="actions">
+              <label class="check inline"><input id="show-audio" type="checkbox"> <span>Hiện từng frame audio</span></label>
+              <button id="clear-log" type="button">Xóa</button>
+            </div>
+          </div>
+          <div id="flow" class="flow">
+            <p class="empty-flow">Bấm <b>Kết nối</b> để bắt đầu. Mỗi dòng là một frame thật trên socket.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="card explain">
+      <h2>Robot và server nói chuyện với nhau thế nào</h2>
+      <div class="explain-grid">
+        <div>
+          <h3>Một lượt hội thoại</h3>
+          <ol>
+            <li><b>Thiết bị mở WebSocket</b> tới <code>/xiaozhi/v1/</code>, kèm header
+              <code>Authorization</code>, <code>Protocol-Version</code>, <code>Device-Id</code>,
+              <code>Client-Id</code>. <span class="note">Trình duyệt không đặt được header nên trang này
+              dùng query param — server chấp nhận cả hai.</span></li>
+            <li><b>Thiết bị gửi <code>hello</code></b> rồi chờ tối đa 10 giây. Nếu không có
+              <code>hello</code> trả về, nó coi như kết nối hỏng.</li>
+            <li><b>Server trả <code>hello</code></b> kèm <code>session_id</code> và
+              <code>audio_params</code>. Đây là lúc thiết bị biết phải giải mã ở sample rate nào.</li>
+            <li><b>Thiết bị gửi <code>listen start</code></b> rồi stream Opus nhị phân liên tục.
+              Ở mode <code>auto</code> nó <i>không bao giờ</i> gửi <code>listen stop</code> — server
+              tự quyết định câu đã kết thúc bằng VAD.</li>
+            <li><b>Server gửi <code>stt</code></b> (chữ để hiện lên màn hình) rồi
+              <code>tts start</code>.</li>
+            <li><b>Server gửi audio Opus</b> theo nhịp, kèm <code>tts sentence_start</code> cho phụ đề.</li>
+            <li><b>Server gửi <code>tts stop</code></b>. Ở mode auto thiết bị quay lại listening và
+              tự gửi <code>listen start</code> mới cho lượt sau.</li>
+          </ol>
+        </div>
+        <div>
+          <h3>Hai ràng buộc dễ làm hỏng audio</h3>
+          <p><b>Thiết bị chỉ nhận audio khi đang ở state speaking.</b> Gửi trước
+            <code>tts start</code> thì gói bị vứt, không có lỗi nào báo về. Vì vậy thứ tự luôn là
+            <code>stt</code> → <code>tts start</code> → audio.</p>
+          <p><b>Hàng đợi giải mã chỉ chứa 20 gói.</b> Đầy là drop im lặng. Nên server phải phát
+            audio theo đúng nhịp thời gian thực chứ không được đẩy hết một lúc — nhìn cột
+            <i>Nhịp trung bình</i> để kiểm chứng.</p>
+
+          <h3>MCP: robot là server, backend là client</h3>
+          <p>Ngược với trực giác. Thiết bị khai <code>features.mcp</code>, backend hỏi
+            <code>initialize</code> rồi <code>tools/list</code>, và khi LLM muốn điều khiển phần cứng
+            thì backend gọi <code>tools/call</code> xuống thiết bị. Tất cả nằm trong
+            <code>{"type":"mcp","payload":…}</code> — dùng chung socket với audio nhưng là hai việc
+            tách biệt.</p>
+          <p>Trang này đóng luôn vai MCP server, nên bạn sẽ thấy đủ cả ba bước ở cột bên phải.
+            Tool có đánh dấu <i>user-only</i> bị giấu khỏi LLM có chủ đích.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/static/xiaozhi.js" defer></script>
+</body>
+</html>

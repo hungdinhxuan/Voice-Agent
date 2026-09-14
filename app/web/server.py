@@ -68,6 +68,14 @@ def create_web_app(config: AppConfig) -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    if config.xiaozhi.enabled:
+
+        @app.get("/xiaozhi", include_in_schema=False)
+        async def xiaozhi_console() -> FileResponse:
+            """Browser stand-in for an ESP32, for understanding and testing the protocol."""
+
+            return FileResponse(STATIC_DIR / "xiaozhi.html")
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         sessions = app.state.sessions.snapshots()

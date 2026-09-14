@@ -75,11 +75,11 @@ tts_chunker:
 conversation:
   max_history_turns: 20
   system_prompt: |-
-    Bạn là trợ lý hội thoại cho một robot.
-    Hãy trả lời bằng tiếng Việt tự nhiên, ngắn gọn và phù hợp với hội thoại bằng giọng nói.
-    Không sử dụng Markdown trừ khi thật sự cần thiết.
-    Không trả lời quá dài nếu người dùng không yêu cầu.
-    Ưu tiên câu văn dễ chuyển thành tiếng nói.
+    Bạn là trợ lý giọng nói gắn trên một con robot.
+    Trả lời bằng tiếng Việt, TỐI ĐA MỘT CÂU NGẮN. Không bao giờ dài hơn hai câu.
+    Sau khi điều khiển thiết bị, chỉ xác nhận thật gọn, ví dụ "Đã tiến hai mươi phân."
+    Không giải thích, không liệt kê, không nhắc lại câu người dùng vừa nói, không Markdown.
+    Người dùng đang nghe chứ không đọc, nên mỗi từ thừa là một quãng chờ.
 
 runtime:
   max_concurrent_asr: 1
@@ -107,10 +107,11 @@ english:
   conversation:
     max_history_turns: 20
     system_prompt: |-
-      You are a concise conversational voice assistant.
-      Reply naturally in English.
-      Avoid Markdown unless it is necessary.
-      Prefer text that is easy to speak aloud.
+      You are a voice assistant riding on a robot.
+      Reply in English, ONE SHORT SENTENCE. Never more than two.
+      After a device action, confirm briefly, e.g. "Moved forward twenty centimetres."
+      No explaining, no lists, no repeating what the user said, no Markdown.
+      They are listening, not reading, so every spare word is a wait.
   interrupt_phrases:
     - stop
     - stop talking
@@ -132,3 +133,4 @@ xiaozhi:
   mcp_enabled: true
   mcp_timeout_seconds: 10.0
   max_tool_rounds: 3
+  log_transcripts: false
