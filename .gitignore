@@ -6,3 +6,6 @@ __pycache__/
 models/
 *.wav
 
+
+# Credential cua thiet bi - chep secrets.example.h thanh secrets.h
+hardware/*/secrets.h

@@ -174,8 +174,9 @@ float SOUND_THRESHOLD_MULTIPLIER = 2.0f;
 //   3. Uplink la PCM tho ~256 kbps. Dung trong LAN. Dung chay qua ket noi
 //      tinh theo dung luong.
 
-#define WIFI_SSID     "hung"
-#define WIFI_PASS     "doi-mat-khau"
+// Credential nam trong secrets.h, khong theo doi trong git. Chua co thi
+// chep secrets.example.h thanh secrets.h roi dien vao.
+#include "secrets.h"
 
 // Server chi bind 127.0.0.1 va tu choi bind ra LAN neu khong co token, nen
 // duong dang dung la qua tunnel. Muon chay thang trong LAN thi phai dat
