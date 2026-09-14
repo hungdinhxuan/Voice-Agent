@@ -137,6 +137,11 @@ class DeviceSession:
         self._uplink = UplinkPipeline(
             agent_sample_rate=self.config.audio.sample_rate,
             agent_block_size=self.config.audio.block_size,
+            # hello.audio is what the device sends up; self.audio_params is what
+            # the server sends down. They are different directions and, for a PCM
+            # device, different formats.
+            source_format=hello.audio.format,
+            device_sample_rate=hello.audio.sample_rate,
         )
         language_config = self.config.for_language(self.settings.language)
         downlink = DownlinkPipeline(
