@@ -3,8 +3,12 @@
 // Robot không có loa, nên điện thoại của người xem đóng vai loa và màn hình:
 // mở http://<ip robot>/ là nghe được câu trả lời và đọc được nội dung.
 //
-// Giải mã Opus bằng WebCodecs, cùng cách console tại /xiaozhi đang dùng. Trang
-// cố tình không có ảnh và không tải gì từ ngoài: robot chỉ phục vụ đúng một file.
+// Audio đi xuống là PCM 16-bit chứ không phải Opus, vì trang này chạy ở http://
+// trên IP LAN nên không phải secure context — và WebCodecs chỉ tồn tại trong
+// secure context. Web Audio thì không đòi điều kiện đó.
+//
+// Trang cố tình không có ảnh và không tải gì từ ngoài: robot chỉ phục vụ đúng
+// một file.
 #pragma once
 #include <pgmspace.h>
 
@@ -38,7 +42,7 @@ button:disabled{opacity:.45;cursor:default}
 <main><div id="log"><p id="empty">Chưa có gì. Hãy nói với robot.</p></div></main>
 <script>
 const $=(i)=>document.getElementById(i);
-let dec=null,ctx=null,head=0,rate=24000,frames=0,sound=false,turn=null;
+let ctx=null,head=0,rate=24000,frames=0,sound=false,turn=null;
 
 function row(who,label,text){
   $('empty')?.remove();
@@ -58,24 +62,29 @@ function act(text){
   ($('log').lastElementChild||row('bot','robot','')).append(d);
   scrollTo(0,document.body.scrollHeight);
 }
-// Giải mã chỉ mở sau khi người dùng bấm: iOS không cho phát tiếng nếu chưa có thao tác.
+// Chỉ mở sau khi người dùng bấm: trình duyệt di động không cho phát tiếng nếu
+// chưa có thao tác.
+//
+// Server gửi PCM 16-bit chứ không phải Opus, có chủ đích: trang này chạy ở
+// http:// trên IP LAN nên KHÔNG phải secure context, mà WebCodecs (AudioDecoder)
+// chỉ tồn tại trong secure context. Web Audio thì không đòi điều kiện đó.
 function openAudio(){
   if(ctx)return;
   ctx=new (window.AudioContext||window.webkitAudioContext)();
   head=0;
-  if(!window.AudioDecoder){act('Trình duyệt không có WebCodecs, chỉ xem được chữ.');return;}
-  dec=new AudioDecoder({output:(d)=>{play(d);d.close();},error:(e)=>act('lỗi giải mã: '+e)});
-  dec.configure({codec:'opus',sampleRate:rate,numberOfChannels:1});
 }
-function play(d){
-  const s=new Float32Array(d.numberOfFrames);
-  d.copyTo(s,{planeIndex:0,format:'f32-planar'});
-  const b=ctx.createBuffer(1,s.length,d.sampleRate);
-  b.copyToChannel(s,0);
-  const src=ctx.createBufferSource();
-  src.buffer=b; src.connect(ctx.destination);
+// Xếp từng khung nối đuôi nhau theo đồng hồ của AudioContext. Bám vào head thay
+// vì phát ngay, nếu không các khung sẽ chồng lên nhau và nghe ra tiếng lạo xạo.
+function playPcm(buf){
+  const src16=new Int16Array(buf);
+  const f32=new Float32Array(src16.length);
+  for(let i=0;i<src16.length;i++)f32[i]=src16[i]/32768;
+  const b=ctx.createBuffer(1,f32.length,rate);
+  b.copyToChannel(f32,0);
+  const node=ctx.createBufferSource();
+  node.buffer=b; node.connect(ctx.destination);
   head=Math.max(head,ctx.currentTime+0.08);
-  src.start(head); head+=b.duration;
+  node.start(head); head+=b.duration;
 }
 $('snd').onclick=()=>{
   sound=!sound;
@@ -93,10 +102,7 @@ function connect(){
   ws.onmessage=(e)=>{
     if(typeof e.data!=='string'){
       frames++;
-      if(sound&&dec&&dec.state==='configured'){
-        try{dec.decode(new EncodedAudioChunk({type:'key',timestamp:frames*60000,
-          data:new Uint8Array(e.data)}));}catch(err){}
-      }
+      if(sound&&ctx){try{playPcm(e.data);}catch(err){}}
       return;
     }
     let m; try{m=JSON.parse(e.data);}catch(err){return;}

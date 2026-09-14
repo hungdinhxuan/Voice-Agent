@@ -77,11 +77,20 @@ ESP32 tự chạy HTTP ở cổng 80 và WebSocket ở 81. Mở **http://alphabo
 hoặc IP của robot bằng điện thoại trong cùng mạng.
 
 Trang hiện câu bạn nói, câu robot trả lời, và các động tác nó thực hiện. Bấm
-**Bật tiếng** thì điện thoại thành loa cho robot — ESP32 chuyển tiếp nguyên gói
-Opus, trình duyệt giải mã bằng WebCodecs, ESP32 không đụng tới codec nào.
+**Bật tiếng** thì điện thoại thành loa cho robot — ESP32 chuyển tiếp nguyên khung
+audio, trình duyệt phát bằng Web Audio, ESP32 không đụng tới codec nào.
 
 Phải bấm mới có tiếng: trình duyệt di động không cho phát âm thanh nếu chưa có
 thao tác của người dùng.
+
+**Vì sao downlink cũng là PCM.** Trang này chạy ở `http://` trên IP LAN, nên
+trình duyệt **không coi đó là secure context** — và `AudioDecoder` (WebCodecs)
+chỉ tồn tại trong secure context. Không có cách nào sửa từ phía trình duyệt:
+không phải HTTPS thì không có WebCodecs, hết. Nên thiết bị khai `format: "pcm"`
+sẽ nhận PCM ở **cả hai chiều**, và Web Audio phát thẳng.
+
+Băng thông không tăng như tưởng: firmware tắt mic trong lúc server nói (mục 5),
+nên hai chiều không bao giờ chạy cùng lúc. Đỉnh vẫn khoảng 256 kbps.
 
 ## 5. Vì sao mic tắt trong lúc server nói
 

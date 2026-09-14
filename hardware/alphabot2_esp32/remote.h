@@ -275,6 +275,7 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t len) {
 // I2S đã có sẵn, dồn vào khung, đầy thì đẩy đi. Chờ 0 tick: không có dữ liệu
 // thì quay ra ngay chứ không ngồi đợi.
 static size_t uplinkFill = 0;
+static unsigned long uplinkFrames = 0;
 
 static bool pumpUplink() {
     if (!remoteReady || !uplinkOpen || !micEnabled) {
@@ -283,8 +284,12 @@ static bool pumpUplink() {
     }
     const size_t want = (UPLINK_SAMPLES - uplinkFill) * 2;   // stereo
     size_t bytesRead = 0;
-    if (i2s_channel_read(rx_handle, uplinkRaw, want * sizeof(int32_t), &bytesRead,
-                         0) != ESP_OK) return false;
+    // i2s_channel_read trả ESP_ERR_TIMEOUT khi chưa gom đủ số byte yêu cầu,
+    // NHƯNG vẫn ghi phần đã đọc được vào bytesRead. Coi đó là lỗi rồi vứt hết
+    // thì không khung nào đi lên cả — đúng lỗi đã làm robot câm lặng.
+    const esp_err_t err = i2s_channel_read(rx_handle, uplinkRaw,
+                                           want * sizeof(int32_t), &bytesRead, 5);
+    if (err != ESP_OK && err != ESP_ERR_TIMEOUT) return false;
     const size_t got = bytesRead / sizeof(int32_t);
     if (got < 2) return false;
 
@@ -298,6 +303,20 @@ static bool pumpUplink() {
     if (uplinkFill < UPLINK_SAMPLES) return false;
     serverWs.sendBIN((uint8_t*)uplinkPcm, UPLINK_SAMPLES * sizeof(int16_t));
     uplinkFill = 0;
+    uplinkFrames++;
+
+    // Báo nhịp mỗi 5 giây kèm biên độ lớn nhất. Im lặng không phân biệt được với
+    // hỏng, nên in ra cả hai: số khung đã gửi và mic có nghe thấy gì không.
+    static unsigned long lastReport = 0;
+    if (millis() - lastReport > 5000) {
+        lastReport = millis();
+        int16_t peak = 0;
+        for (size_t i = 0; i < UPLINK_SAMPLES; i++) {
+            const int16_t v = uplinkPcm[i] < 0 ? -uplinkPcm[i] : uplinkPcm[i];
+            if (v > peak) peak = v;
+        }
+        Serial.printf("[MIC] da gui %lu khung, dinh %d/32767\n", uplinkFrames, peak);
+    }
     return true;
 }
 

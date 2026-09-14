@@ -73,7 +73,13 @@ def _decode_pcm(packet: bytes) -> np.ndarray:
 
 
 class DownlinkPipeline:
-    """Voice-agent TTS PCM to device Opus packets."""
+    """Voice-agent TTS PCM to device audio packets.
+
+    Opus for official firmware. A device that declared `pcm` gets raw
+    little-endian 16-bit frames instead: it has no Opus encoder, so assuming it
+    has a decoder would be optimistic. The cost is bandwidth, and it is bounded
+    in practice because a device only receives while it is not sending.
+    """
 
     def __init__(
         self,
@@ -81,16 +87,31 @@ class DownlinkPipeline:
         device_sample_rate: int,
         frame_duration_ms: int,
         bitrate: int,
+        *,
+        target_format: str = AUDIO_FORMAT,
     ) -> None:
         self.agent_sample_rate = agent_sample_rate
-        self._encoder = OpusEncoder(device_sample_rate, frame_duration_ms, bitrate)
         self._device_sample_rate = device_sample_rate
+        self._frame_duration_ms = frame_duration_ms
+        if target_format == PCM_FORMAT:
+            self._encoder: OpusEncoder | None = None
+            frame_samples = device_sample_rate * frame_duration_ms // 1000
+        else:
+            self._encoder = OpusEncoder(device_sample_rate, frame_duration_ms, bitrate)
+            frame_samples = self._encoder.frame_samples
+            self._frame_duration_ms = self._encoder.frame_duration_ms
         self._resampler = StreamResampler(agent_sample_rate, device_sample_rate)
-        self._blocker = FrameBlocker(self._encoder.frame_samples)
+        self._blocker = FrameBlocker(frame_samples)
 
     @property
     def frame_duration_ms(self) -> int:
-        return self._encoder.frame_duration_ms
+        return self._frame_duration_ms
+
+    def _pack(self, frame: np.ndarray) -> list[bytes]:
+        if self._encoder is not None:
+            return list(self._encoder.encode(frame))
+        clipped = np.clip(frame, -1.0, 1.0) * (_INT16_SCALE - 1)
+        return [clipped.astype("<i2").tobytes()]
 
     def begin_turn(self) -> None:
         """Start a fresh resample/blocking state so turns cannot bleed together."""
@@ -101,18 +122,19 @@ class DownlinkPipeline:
     def push(self, samples: np.ndarray) -> list[bytes]:
         packets: list[bytes] = []
         for frame in self._blocker.push(self._resampler.push(samples)):
-            packets.extend(self._encoder.encode(frame))
+            packets.extend(self._pack(frame))
         return packets
 
     def flush(self) -> list[bytes]:
-        """Emit the tail of the turn, zero-padded to a whole Opus frame."""
+        """Emit the tail of the turn, zero-padded to a whole frame."""
 
         packets: list[bytes] = []
         for frame in self._blocker.push(self._resampler.flush()):
-            packets.extend(self._encoder.encode(frame))
+            packets.extend(self._pack(frame))
         for frame in self._blocker.flush():
-            packets.extend(self._encoder.encode(frame))
+            packets.extend(self._pack(frame))
         return packets
 
     def close(self) -> None:
-        self._encoder.close()
+        if self._encoder is not None:
+            self._encoder.close()

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import time
 import uuid
+from dataclasses import replace
 from typing import Any, Protocol
 
 from app.config import AppConfig
@@ -143,12 +144,17 @@ class DeviceSession:
             source_format=hello.audio.format,
             device_sample_rate=hello.audio.sample_rate,
         )
+        # A device without an Opus encoder is assumed to have no decoder either,
+        # so `pcm` in hello switches both directions. The server hello below then
+        # tells it what it is about to receive.
+        self.audio_params = replace(self.audio_params, format=hello.audio.format)
         language_config = self.config.for_language(self.settings.language)
         downlink = DownlinkPipeline(
             agent_sample_rate=language_config.audio.output_sample_rate,
             device_sample_rate=self.audio_params.sample_rate,
             frame_duration_ms=self.audio_params.frame_duration_ms,
             bitrate=self.settings.opus_bitrate,
+            target_format=self.audio_params.format,
         )
         self._pacer = PacedFrameSender(
             self.audio_params.frame_duration_ms,
