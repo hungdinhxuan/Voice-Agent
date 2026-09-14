@@ -143,6 +143,7 @@ static void mcpToolCall(long id, const char* name, JsonObjectConst args) {
     }
     char note[48];
     snprintf(note, sizeof(note), "%s %c%ld", started ? "running" : "queued", verb, value);
+    Serial.print("[TOOL] "); Serial.println(note);
     viewerAction(note);
     mcpResultText(id, note, false);
 }
@@ -365,6 +366,7 @@ void remoteTick() {
     serverWs.loop();
     viewerTick();
     motionTick();
+    motionSerialTick();   // go lenh tay qua USB de tach bach loi
     pumpUplink();
 }
 

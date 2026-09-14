@@ -94,3 +94,42 @@ bool motionCommand(char verb, long value, bool* started) {
     }
     return true;
 }
+
+// --- điều khiển tay qua USB -------------------------------------------------
+//
+// Cùng bộ lệnh mà MCP đẩy xuống, nhưng gõ được từ Serial Monitor. Để tách bạch
+// "không có điện động cơ" với "lệnh không tới nơi": gõ F20 mà bánh không quay
+// thì lỗi nằm ở nguồn hoặc dây, không phải ở đường tiếng nói.
+//
+//   F<cm>  B<cm>  L<độ>  R<độ>  S        ví dụ F20
+//   ?      in trạng thái
+
+void motionSerialTick() {
+    static char buf[24];
+    static uint8_t len = 0;
+    while (Serial.available()) {
+        const char c = Serial.read();
+        if (c == '\r') continue;
+        if (c != '\n') {
+            if (len < sizeof(buf) - 1) buf[len++] = c;
+            continue;
+        }
+        buf[len] = 0;
+        len = 0;
+        if (!buf[0]) continue;
+
+        if (buf[0] == '?') {
+            Serial.printf("[MOTION] dang chay=%s, con cho=%u, stopAt=%lu, now=%lu\n",
+                          moveStopAt ? "co" : "khong", moveQueueLen, moveStopAt, millis());
+            continue;
+        }
+
+        bool started = false;
+        const long value = (buf[0] == 'S') ? 1 : atol(buf + 1);
+        if (motionCommand(buf[0], value, &started)) {
+            Serial.printf("[MOTION] %s %s\n", started ? "chay ngay" : "xep hang", buf);
+        } else {
+            Serial.printf("[MOTION] lenh la hoac thieu tham so: %s\n", buf);
+        }
+    }
+}
