@@ -1,5 +1,11 @@
 # Điều khiển AlphaBot2 bằng giọng nói, qua trình duyệt làm cầu Bluetooth
 
+> **Đường này đã bị gỡ.** Console tại `/xiaozhi` không còn nút BLE/USB nữa: nó đã
+> được thay bằng cách mượn tool (`?control=<device-id>`), xem
+> [alphabot2_esp32.md](alphabot2_esp32.md) mục 8c. Sketch
+> `hardware/alphabot2_ble` vẫn chạy được — chỉ là qua Serial Monitor, không qua
+> trình duyệt. Tài liệu này giữ lại làm tham chiếu cho phần cứng và giao thức lệnh.
+
 Dành cho robot **không có WiFi**. Trình duyệt đóng vai thiết bị Xiaozhi: nó giữ
 WebSocket ra server và giữ BLE xuống robot, nên robot chỉ cần Bluetooth.
 

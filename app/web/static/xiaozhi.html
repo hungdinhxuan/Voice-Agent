@@ -39,11 +39,12 @@
           <label class="check"><input id="user-tool" type="checkbox"> <span>Thêm một user-only tool (<code>self.reboot</code>)</span></label>
           <label class="row"><span>Access token</span><input id="token" type="password" placeholder="để trống nếu không bật"></label>
           <label class="row"><span>Điều khiển robot</span>
-            <input id="control" type="text" placeholder="device-id, vd alphabot2 — để trống thì dùng tool giả lập">
+            <input id="control" type="text" placeholder="device-id, vd alphabot2 — để trống thì không điều khiển gì">
           </label>
-          <p class="hint">Điền vào đây thì tool call đi thẳng xuống con robot đó thay vì
-            xuống cổng USB/BLE. Dùng khi muốn nói vào mic của máy này mà robot ở nơi khác
-            chạy — trang do robot tự phục vụ không xin được mic vì nó không phải HTTPS.</p>
+          <p class="hint">Điền device-id của một robot đang nối thì tool call đi thẳng
+            xuống nó. Dùng khi muốn nói vào mic của máy này mà robot ở nơi khác chạy —
+            trang do robot tự phục vụ không xin được mic vì nó không phải HTTPS.
+            Để trống thì trang này chỉ còn hai tool minh hoạ giao thức.</p>
         </article>
 
         <article class="card">
@@ -69,40 +70,7 @@
         </article>
 
         <article class="card">
-          <h2>3 · Robot qua Bluetooth</h2>
-          <p class="hint">Trình duyệt cầm luôn hai đầu: WebSocket ra server, và một đường xuống
-            robot. Khi LLM gọi <code>tools/call</code>, lệnh được dịch thành một dòng lệnh gửi
-            xuống. <b>BLE</b> cho module BLE (HM-10, AT-09). <b>USB</b> cho cáp cắm thẳng, và cũng
-            mở được cổng COM ảo mà Windows tạo ra khi pair module classic như HC-05.</p>
-          <div class="buttons">
-            <button id="ble" type="button">Kết nối robot (BLE)</button>
-            <button id="usb" type="button">hoặc qua USB</button>
-            <span id="ble-state" class="ble-state">chưa kết nối</span>
-          </div>
-          <label class="row"><span>Profile UART</span>
-            <select id="ble-profile">
-              <option value="auto">tự dò (Nordic, HM-10)</option>
-              <option value="nordic">Nordic UART</option>
-              <option value="hm10">HM-10 / AT-09</option>
-              <option value="custom">UUID tự nhập</option>
-            </select>
-          </label>
-          <label class="row" id="custom-row" hidden><span>service / write UUID</span>
-            <input id="ble-uuid" type="text" placeholder="service,write">
-          </label>
-          <div class="buttons">
-            <button class="tiny" data-cmd="F20" type="button" disabled>F20</button>
-            <button class="tiny" data-cmd="B20" type="button" disabled>B20</button>
-            <button class="tiny" data-cmd="L90" type="button" disabled>L90</button>
-            <button class="tiny" data-cmd="R90" type="button" disabled>R90</button>
-            <button class="tiny" data-cmd="S" type="button" disabled>STOP</button>
-          </div>
-          <p class="hint">Bấm tay để thử dây trước khi thử bằng giọng nói. Lệnh cuối:
-            <code id="ble-last">—</code></p>
-        </article>
-
-        <article class="card">
-          <h2>4 · Thiết bị đang ở state nào</h2>
+          <h2>3 · Thiết bị đang ở state nào</h2>
           <p class="hint">Firmware sở hữu state machine này. Server chỉ tác động gián tiếp qua <code>tts start</code> / <code>tts stop</code>.</p>
           <div id="states" class="states">
             <div class="state" data-state="idle"><b>idle</b><small>chờ</small></div>
@@ -114,7 +82,7 @@
         </article>
 
         <article class="card">
-          <h2>5 · Đàm phán audio</h2>
+          <h2>4 · Đàm phán audio</h2>
           <table class="kv">
             <tr><th>Uplink (mic)</th><td id="up">Opus 16000 Hz · 1ch · 60 ms</td></tr>
             <tr><th>Downlink (loa)</th><td id="down">—</td></tr>

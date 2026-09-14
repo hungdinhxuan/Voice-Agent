@@ -77,6 +77,7 @@ static int16_t downPcm[2048];
 
 static void opusEncoderStart() {
     if (opusEnc) return;
+    const unsigned heapBefore = ESP.getFreeHeap();
     int err = 0;
     opusEnc = opus_encoder_create(SAMPLE_RATE, 1, OPUS_APPLICATION_AUDIO, &err);
     if (err != OPUS_OK || !opusEnc) {
@@ -85,7 +86,27 @@ static void opusEncoderStart() {
         opusEnc = nullptr;
         return;
     }
-    Serial.println("[OPUS] encoder san sang 16 kHz mono");
+
+    // Ma hoa mot khung im lang ngay bay gio, truoc khi WiFi va TLS cap phat.
+    //
+    // Thu vien dung NONTHREADSAFE_PSEUDOSTACK: lan ALLOC dau tien no malloc mot
+    // khoi LIEN MACH 60 KB lam vung nhap dung chung. Malloc do hong thi moi
+    // ALLOC ve sau tra NULL va libopus assert (pcm_buf != NULL) -> reset. Heap
+    // con 170 KB van hong duoc, vi TLS bam nho no thanh nhieu manh khong manh
+    // nao du 60 KB. Chiem truoc luc heap con nguyen thi het van de.
+    static int16_t silence[UPLINK_SAMPLES];
+    const int primed = opus_encode(opusEnc, silence, UPLINK_SAMPLES,
+                                   opusPacket, sizeof(opusPacket));
+    const unsigned heapAfter = ESP.getFreeHeap();
+    if (primed <= 0) {
+        Serial.print("[OPUS] khong chiem duoc vung nhap, ma hoa se hong. Loi ");
+        Serial.println(primed);
+        return;
+    }
+    Serial.print("[OPUS] encoder san sang 16 kHz mono, vung nhap ");
+    Serial.print((heapBefore - heapAfter) / 1024);
+    Serial.print(" KB, heap con ");
+    Serial.println(heapAfter);
 }
 
 // Decoder chỉ dựng được sau hello, vì lúc đó mới biết server phát ở tần số nào.
@@ -203,6 +224,9 @@ static void handleMcp(JsonObjectConst payload) {
     if (!strncmp(method, "notifications", 13)) return;
     if (!payload["id"].is<long>()) return;
     const long id = payload["id"].as<long>();
+
+    Serial.print("[MCP] nhan "); Serial.print(method);
+    Serial.print(" luc t="); Serial.println(millis());
 
     if (!strcmp(method, "initialize")) {
         JsonDocument reply;
@@ -332,6 +356,7 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t len) {
 static size_t uplinkFill = 0;
 static unsigned long uplinkFrames = 0;
 static unsigned long uplinkBytes = 0;
+static unsigned long uplinkWorstSend = 0;
 
 static bool pumpUplink() {
     if (!remoteReady || !uplinkOpen || !micEnabled) {
@@ -362,7 +387,10 @@ static bool pumpUplink() {
     const int packed = opus_encode(opusEnc, uplinkPcm, UPLINK_SAMPLES,
                                    opusPacket, sizeof(opusPacket));
     if (packed <= 0) return false;
+    const unsigned long sendStart = millis();
     serverWs.sendBIN(opusPacket, packed);
+    const unsigned long sendMs = millis() - sendStart;
+    if (sendMs > uplinkWorstSend) uplinkWorstSend = sendMs;
     uplinkFrames++;
     uplinkBytes += packed;
 
@@ -378,7 +406,9 @@ static bool pumpUplink() {
         }
         // In ra kbps thuc te: day la con so quyet dinh co nghen hay khong.
         const unsigned long kbps = uplinkBytes * 8 / 5000;
-        Serial.printf("[MIC] %lu khung, %lu kbps, dinh %d/32767\n", uplinkFrames, kbps, peak);
+        Serial.printf("[MIC] %lu khung, %lu kbps, dinh %d/32767, sendBIN lau nhat %lu ms\n",
+                      uplinkFrames, kbps, peak, uplinkWorstSend);
+        uplinkWorstSend = 0;
         uplinkBytes = 0;
     }
     return true;
@@ -389,6 +419,9 @@ static bool pumpUplink() {
 bool remoteWifiUp() { return WiFi.status() == WL_CONNECTED; }
 
 void remoteBegin() {
+    // Truoc WiFi: xem chu thich trong opusEncoderStart ve vi sao thu tu quan trong.
+    opusEncoderStart();
+
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);      // ngủ WiFi làm uplink giật
     WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -407,7 +440,6 @@ void remoteBegin() {
 
     char path[128];
     snprintf(path, sizeof(path), "/xiaozhi/v1/?device-id=%s&client-id=%s", DEVICE_ID, DEVICE_ID);
-    opusEncoderStart();
     Serial.printf("[WS] noi toi %s://%s:%d%s (heap=%u)\n",
                   SERVER_TLS ? "wss" : "ws", SERVER_HOST, SERVER_PORT, path,
                   (unsigned)ESP.getFreeHeap());

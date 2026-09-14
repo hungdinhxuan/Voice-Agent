@@ -136,7 +136,7 @@ function connect() {
   setState('connecting');
   note(control
     ? `Mở WebSocket tới ${url.pathname}, và mượn tool của thiết bị "${control}" — `
-      + 'tool call sẽ đi xuống nó chứ không xuống cổng USB/BLE ở đây.'
+      + 'tool call sẽ đi xuống nó chứ không dùng tool minh hoạ của trang này.'
     : `Mở WebSocket tới ${url.pathname} (device-id và token đi qua query param).`);
 
   const ws = new WebSocket(url);
@@ -238,221 +238,6 @@ function onBinary(buffer) {
   if ($('play').checked) decode(buffer);
 }
 
-// --------------------------------------------------------------- BLE bridge
-
-// Web Bluetooth chỉ nói được BLE/GATT. HC-05 và HC-06 là Bluetooth classic SPP
-// nên trình duyệt KHÔNG kết nối được — phải dùng HM-10, AT-09, JDY-08 hoặc ESP32.
-const UART_PROFILES = {
-  nordic: {
-    label: 'Nordic UART',
-    service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-    write: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
-  },
-  hm10: { label: 'HM-10 / AT-09', service: 0xffe0, write: 0xffe1 },
-};
-
-// Tool robot: tên tool -> dòng lệnh gửi xuống Arduino.
-const MOVE_TOOLS = [
-  {
-    name: 'self.chassis.forward', description: 'Drive the robot forward',
-    arg: 'distance_cm', unit: 'distance in centimetres', min: 1, max: 500, fallback: 20,
-    command: (args) => `F${args.distance_cm ?? 20}`,
-  },
-  {
-    name: 'self.chassis.backward', description: 'Drive the robot backward',
-    arg: 'distance_cm', unit: 'distance in centimetres', min: 1, max: 500, fallback: 20,
-    command: (args) => `B${args.distance_cm ?? 20}`,
-  },
-  {
-    name: 'self.chassis.turn_left', description: 'Turn the robot left in place',
-    arg: 'degrees', unit: 'angle in degrees', min: 1, max: 360, fallback: 90,
-    command: (args) => `L${args.degrees ?? 90}`,
-  },
-  {
-    name: 'self.chassis.turn_right', description: 'Turn the robot right in place',
-    arg: 'degrees', unit: 'angle in degrees', min: 1, max: 360, fallback: 90,
-    command: (args) => `R${args.degrees ?? 90}`,
-  },
-  { name: 'self.chassis.stop', description: 'Stop the robot immediately', command: () => 'S' },
-];
-
-function moveToolSchema(tool) {
-  if (!tool.arg) return { name: tool.name, description: tool.description, inputSchema: { type: 'object', properties: {} } };
-  return {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        // Có default nên firmware bỏ nó khỏi `required`, và model không bị ép bịa số.
-        [tool.arg]: {
-          type: 'integer', minimum: tool.min, maximum: tool.max,
-          default: tool.fallback, description: tool.unit,
-        },
-      },
-    },
-  };
-}
-
-const ble = { device: null, characteristic: null };
-const usb = { port: null, writer: null, onLine: null };
-let commandsSent = 0;
-
-function bleConnected() { return Boolean(ble.characteristic); }
-function usbConnected() { return Boolean(usb.writer); }
-function robotConnected() { return bleConnected() || usbConnected(); }
-
-// Web Serial: robot cắm USB vào chính máy đang mở trang. Không cần module BLE,
-// và sketch nhận cùng bộ lệnh trên cả hai cổng.
-async function connectUsb() {
-  if (!navigator.serial) {
-    throw new Error('Trình duyệt không có Web Serial. Cần Chrome hoặc Edge, và trang phải HTTPS hoặc localhost.');
-  }
-  const port = await navigator.serial.requestPort();
-  await port.open({ baudRate: 115200 });
-  usb.port = port;
-  usb.writer = port.writable.getWriter();
-  readUsb(port);
-
-  // getInfo() chỉ có vendor/product id với cổng USB thật. Cổng COM ảo của một
-  // thiết bị Bluetooth cũng hiện trong hộp thoại chọn cổng và trông y hệt, nên
-  // nói rõ ra thay vì để người dùng tưởng đã cắm đúng dây.
-  const info = port.getInfo?.() ?? {};
-  const usbPort = info.usbProductId !== undefined;
-  setBle(usbPort ? `USB · ${info.usbProductId}` : 'Serial · không phải USB', true);
-
-  // Arduino reset khi cổng mở và mất khoảng 2 giây mới chạy. Lệnh gửi trong
-  // khoảng đó rơi vào hư không. Chờ chính dòng "ready" của sketch thay vì đoán.
-  const boot = await waitForRobotLine(4000);
-  if (boot) {
-    note(`Robot đã boot và trả lời "${boot}". Đường xuống robot thông, gửi lệnh được ngay.`);
-  } else if (usbPort) {
-    note('Mở được cổng nhưng robot im trong 4 giây. Sketch có thể chưa được nạp, '
-      + 'hoặc baud không phải 115200. Bấm F20 thử, không thấy "robot →" là chưa thông.');
-  } else {
-    note('Cổng này không phải USB — nhiều khả năng là cổng COM ảo của một thiết bị '
-      + 'Bluetooth, và robot không nằm ở đầu kia. Chọn lại cổng Arduino.');
-  }
-}
-
-// Lấy dòng đầu tiên robot nói ra, hoặc null nếu hết giờ.
-function waitForRobotLine(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => { usb.onLine = null; resolve(null); }, ms);
-    usb.onLine = (line) => { clearTimeout(timer); usb.onLine = null; resolve(line); };
-  });
-}
-
-async function readUsb(port) {
-  const decoder = new TextDecoderStream();
-  port.readable.pipeTo(decoder.writable).catch(() => {});
-  const reader = decoder.readable.getReader();
-  let pending = '';
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += value;
-      let index;
-      while ((index = pending.indexOf('\n')) >= 0) {
-        const line = pending.slice(0, index).trim();
-        pending = pending.slice(index + 1);
-        // Phản hồi thật của robot, thứ mà đường BLE hiện chưa đọc được.
-        if (line) { row('down', 'robot →', line); usb.onLine?.(line); }
-      }
-    }
-  } catch (error) {
-    fail('usb', String(error));
-  } finally {
-    usb.writer = null; usb.port = null;
-    setBle('mất kết nối', false);
-  }
-}
-
-async function disconnectUsb() {
-  try { usb.writer?.releaseLock(); } catch { /* đang đóng */ }
-  usb.writer = null;
-  await usb.port?.close().catch(() => {});
-  usb.port = null;
-  setBle('chưa kết nối', false);
-}
-
-function setBle(text, ok) {
-  $('ble-state').textContent = text;
-  $('ble-state').className = `ble-state${ok ? ' ok' : ''}`;
-  for (const button of document.querySelectorAll('button[data-cmd]')) button.disabled = !ok;
-  $('ble').textContent = ok ? 'Ngắt robot' : 'Kết nối robot (BLE)';
-}
-
-function chosenProfiles() {
-  const choice = $('ble-profile').value;
-  if (choice === 'custom') {
-    const [service, write] = $('ble-uuid').value.split(',').map((part) => part.trim());
-    if (!service || !write) throw new Error('Cần nhập "service,write" UUID.');
-    return [{ label: 'custom', service, write }];
-  }
-  if (choice === 'auto') return Object.values(UART_PROFILES);
-  return [UART_PROFILES[choice]];
-}
-
-async function connectBle() {
-  if (!navigator.bluetooth) {
-    fail('bluetooth', 'Trình duyệt không có Web Bluetooth. Cần Chrome hoặc Edge, và trang phải chạy qua HTTPS.');
-    return;
-  }
-  const profiles = chosenProfiles();
-  const device = await navigator.bluetooth.requestDevice({
-    acceptAllDevices: true,
-    optionalServices: profiles.map((profile) => profile.service),
-  });
-  const server = await device.gatt.connect();
-  let last;
-  for (const profile of profiles) {
-    try {
-      const service = await server.getPrimaryService(profile.service);
-      ble.characteristic = await service.getCharacteristic(profile.write);
-      ble.device = device;
-      device.addEventListener('gattserverdisconnected', () => {
-        ble.characteristic = null; ble.device = null;
-        setBle('mất kết nối', false);
-        note('Robot ngắt BLE. Tool điều khiển sẽ trả lỗi cho LLM cho tới khi kết nối lại.');
-      });
-      setBle(`BLE · ${device.name || 'robot'} · ${profile.label}`, true);
-      note(`Đã nối BLE tới ${device.name || 'thiết bị'} qua ${profile.label}. `
-        + 'Các tool chassis giờ đẩy lệnh thật xuống robot.');
-      return;
-    } catch (error) { last = error; }
-  }
-  device.gatt.disconnect();
-  throw new Error(`Không tìm thấy UART service nào. ${last}`);
-}
-
-function withTimeout(promise, ms, message) {
-  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
-}
-
-// Một đường gửi cho cả hai transport. USB được ưu tiên vì chỉ nối được một đường
-// tại một thời điểm, và đường USB còn đọc được phản hồi của robot.
-async function robotSend(command) {
-  const line = new TextEncoder().encode(`${command}\n`);
-  let via;
-  if (usbConnected()) {
-    // Cổng COM của một thiết bị Bluetooth vắng mặt mở được nhưng ghi thì treo
-    // vô hạn. Không chặn thì tools/call không bao giờ trả lời, LLM đứng im.
-    await withTimeout(usb.writer.write(line), 4000,
-      'Cổng serial không nhận lệnh sau 4 giây. Nhiều khả năng đây không phải cổng của robot.');
-    via = 'usb';
-  } else if (bleConnected()) {
-    await ble.characteristic.writeValue(line);
-    via = 'ble';
-  } else {
-    throw new Error('Robot chưa kết nối. Bấm "Kết nối robot (BLE)" hoặc "hoặc qua USB".');
-  }
-  commandsSent += 1;
-  $('ble-last').textContent = command;
-  row('up', `${via} →robot`, `Gửi "${command}" xuống AlphaBot2 (lệnh thứ ${commandsSent}).`);
-}
-
 // ---------------------------------------------------------------- fake MCP
 
 function buildTools() {
@@ -469,9 +254,6 @@ function buildTools() {
     description: 'Get the current status of this device',
     inputSchema: { type: 'object', properties: {} },
   }];
-  // Luôn khai tool robot, kể cả khi chưa nối BLE: lúc đó tools/call trả isError
-  // để LLM nói lại cho người dùng, thay vì im lặng không làm gì.
-  tools.push(...MOVE_TOOLS.map(moveToolSchema));
   if ($('user-tool').checked) {
     tools.push({
       name: 'self.reboot',
@@ -540,8 +322,6 @@ function handleMcp(payload) {
       return;
     }
     const args = payload.params?.arguments || {};
-    const move = MOVE_TOOLS.find((item) => item.name === name);
-    if (move) { runMove(id, move, args); return; }
     const text = name === 'self.get_device_status'
       ? JSON.stringify({ battery: 87, volume: 60, wifi: 'ok' })
       : `ok: ${JSON.stringify(args)}`;
@@ -552,25 +332,6 @@ function handleMcp(payload) {
 
   replyMcp({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not implemented: ${method}` } },
     'Method lạ nên trả -32601.');
-}
-
-// isError thay vì error JSON-RPC: LLM đọc được nội dung và nói lại cho người dùng,
-// thay vì coi đây là lỗi giao thức.
-async function runMove(id, move, args) {
-  const command = move.command(args);
-  try {
-    await robotSend(command);
-  } catch (error) {
-    replyMcp({
-      jsonrpc: '2.0', id,
-      result: { content: [{ type: 'text', text: `Không gửi được lệnh: ${error.message}` }], isError: true },
-    }, 'Robot chưa sẵn sàng. Trả isError để LLM giải thích cho người dùng.');
-    return;
-  }
-  replyMcp({
-    jsonrpc: '2.0', id,
-    result: { content: [{ type: 'text', text: `sent ${command}` }], isError: false },
-  }, `Đã đẩy "${command}" xuống robot.`);
 }
 
 // ------------------------------------------------------------------- audio
@@ -707,47 +468,6 @@ $('mic').addEventListener('click', async () => {
 });
 
 $('clear-log').addEventListener('click', () => { $('flow').innerHTML = ''; app.audioRow = null; });
-
-$('ble-profile').addEventListener('change', (event) => {
-  $('custom-row').hidden = event.target.value !== 'custom';
-});
-
-$('ble').addEventListener('click', async () => {
-  if (bleConnected()) { ble.device?.gatt.disconnect(); return; }
-  if (usbConnected()) { await disconnectUsb(); return; }
-  try {
-    setBle('đang kết nối…', false);
-    await connectBle();
-  } catch (error) {
-    setBle('chưa kết nối', false);
-    fail('bluetooth', String(error.message || error));
-  }
-});
-
-$('usb').addEventListener('click', async () => {
-  if (usbConnected()) { await disconnectUsb(); return; }
-  if (bleConnected()) { fail('usb', 'Đang nối BLE rồi, ngắt trước đã.'); return; }
-  try {
-    setBle('đang mở cổng…', false);
-    await connectUsb();
-  } catch (error) {
-    setBle('chưa kết nối', false);
-    fail('usb', String(error.message || error));
-  }
-});
-
-for (const button of document.querySelectorAll('button[data-cmd]')) {
-  button.addEventListener('click', () => {
-    robotSend(button.dataset.cmd).catch((error) => fail('robot', String(error.message || error)));
-  });
-}
-
-setBle('chưa kết nối', false);
-if (!navigator.bluetooth) $('ble').disabled = true;
-if (!navigator.serial) $('usb').disabled = true;
-if (!navigator.bluetooth && !navigator.serial) {
-  setBle('trình duyệt không hỗ trợ cả Web Bluetooth lẫn Web Serial', false);
-}
 
 setState('idle');
 enable(false);
