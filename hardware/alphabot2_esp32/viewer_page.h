@@ -36,13 +36,14 @@ main{padding:16px;max-width:640px;margin:0 auto}
 button{font:inherit;padding:9px 14px;border:1px solid var(--line);border-radius:7px;
 background:transparent;color:var(--fg);cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
+button.want{border-color:var(--bot);color:var(--bot);font-weight:600}
 </style></head><body>
 <header><span id="dot"></span><h1>AlphaBot2</h1>
 <button id="snd">Bật tiếng</button><span id="state">đang nối…</span></header>
 <main><div id="log"><p id="empty">Chưa có gì. Hãy nói với robot.</p></div></main>
 <script>
 const $=(i)=>document.getElementById(i);
-let ctx=null,head=0,rate=24000,frames=0,sound=false,turn=null;
+let ctx=null,head=0,rate=24000,frames=0,sound=false,turn=null,mode='';
 
 function row(who,label,text){
   $('empty')?.remove();
@@ -86,11 +87,21 @@ function playPcm(buf){
   head=Math.max(head,ctx.currentTime+0.08);
   node.start(head); head+=b.duration;
 }
+// Tiếng đang tới mà loa chưa bật thì phải nói ra. Trước đây trang lặng lẽ vứt
+// khung đi trong khi trạng thái vẫn ghi "đã nối", nên người xem chỉ thấy chữ
+// chạy và tưởng loa hỏng — không có gì chỉ ra rằng còn thiếu một cú chạm.
+function nudge(){
+  if(sound)return;
+  $('snd').classList.add('want');
+  $('state').textContent='có tiếng — bấm Bật tiếng';
+}
 $('snd').onclick=()=>{
   sound=!sound;
   if(sound)openAudio();
   if(ctx)ctx.resume();
   $('snd').textContent=sound?'Tắt tiếng':'Bật tiếng';
+  $('snd').classList.remove('want');
+  if(sound)$('state').textContent=mode;
 };
 
 function connect(){
@@ -103,11 +114,12 @@ function connect(){
     if(typeof e.data!=='string'){
       frames++;
       if(sound&&ctx){try{playPcm(e.data);}catch(err){}}
+      else nudge();
       return;
     }
     let m; try{m=JSON.parse(e.data);}catch(err){return;}
-    if(m.t==='cfg'){rate=m.rate||rate;$('state').textContent=m.mode;return;}
-    if(m.t==='mode'){$('state').textContent=m.mode;return;}
+    if(m.t==='cfg'){rate=m.rate||rate;mode=m.mode;$('state').textContent=mode;return;}
+    if(m.t==='mode'){mode=m.mode;if(sound)$('state').textContent=mode;return;}
     if(m.t==='you'){turn=null;row('you','bạn',m.text);return;}
     if(m.t==='bot'){
       if(turn)turn.querySelector('.txt').textContent+=' '+m.text;
