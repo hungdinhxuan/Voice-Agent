@@ -29,14 +29,23 @@ nếu muốn khoá hẳn ở hành vi gốc.
 
 ## 2. Sửa trước khi nạp
 
-Trong `alphabot2_esp32.ino`:
+WiFi nằm trong `secrets.h`, **không theo dõi trong git**. Chép mẫu rồi điền:
+
+```bash
+cp hardware/alphabot2_esp32/secrets.example.h hardware/alphabot2_esp32/secrets.h
+```
 
 ```cpp
-#define WIFI_SSID     "doi-ten-wifi"
-#define WIFI_PASS     "doi-mat-khau"
-#define SERVER_HOST   "192.168.0.204"   // IP LAN của máy chạy server
-#define SERVER_PORT   8080
-#define SERVER_TLS    0
+#define WIFI_SSID     "ten-wifi-cua-ban"
+#define WIFI_PASS     "mat-khau-cua-ban"
+```
+
+Địa chỉ server thì ở `alphabot2_esp32.ino`:
+
+```cpp
+#define SERVER_HOST   "voiceagent.hungdx.com"
+#define SERVER_PORT   443
+#define SERVER_TLS    1
 ```
 
 **`SERVER_HOST` không được là `127.0.0.1`.** Server mặc định bind `127.0.0.1`
@@ -59,17 +68,54 @@ bind ra ngoài loopback khi thiếu `web.access_token` và `xiaozhi.access_token
 (mỗi cái tối thiểu 16 ký tự). Chốt này có chủ đích — đừng gỡ, hãy đặt token rồi
 gửi kèm trong query nếu muốn chạy LAN.
 
-## 3. Vì sao uplink là PCM chứ không phải Opus
+## 3. Opus, và vì sao không phải PCM thô
 
-Firmware Xiaozhi chính thức mã hoá Opus trên thiết bị. Sketch này gửi **PCM thô
-16-bit little-endian 16 kHz**, và adapter chấp nhận `format: "pcm"` riêng cho
-thiết bị tự làm.
+Sketch mã hoá **Opus 16 kHz mono, khung 60 ms** ngay trên thiết bị — đúng như
+firmware Xiaozhi chính thức (`audio_service.h`: `OPUS_FRAME_DURATION_MS 60`,
+`ESP_AUDIO_SAMPLE_RATE_16K`, `ESP_OPUS_BITRATE_AUTO`).
 
-Đổi lại: ~256 kbps thay vì ~24 kbps. Trong LAN thì không đáng kể. **Đừng chạy
-đường này qua kết nối tính theo dung lượng.**
+Bản đầu gửi PCM thô cho đơn giản, và nó hỏng theo cách không nhìn ra ngay: 256
+kbps làm bão hoà đường ghi TLS của ESP32, bộ đệm gửi không bao giờ rỗng lại, và
+mọi gói MCP xếp hàng sau audio — **3.8 giây mỗi lệnh**, trong khi vòng MCP lúc
+vừa bắt tay chỉ dưới 1 giây. Không phải phần cứng yếu, mà là gửi gấp 20 lần
+lượng dữ liệu cần thiết.
 
-Muốn dùng Opus thì cài `arduino-libopus`, mã hoá trước khi `sendBIN`, và đổi
-`format` về `"opus"` — adapter không cần sửa gì.
+Đo lại sau khi bật Opus: **13 kbps**.
+
+Chiều xuống cũng là Opus, và **ESP32 tự giải mã thành PCM** cho trình duyệt —
+trang người xem chạy `http://` trên LAN nên không có WebCodecs (mục 4).
+
+Adapter vẫn chấp nhận `format: "pcm"` cho thiết bị tự làm nào không có codec;
+xem `tests/test_xiaozhi_audio.py`.
+
+### Thư viện Opus
+
+Không có trong index của Arduino, phải clone tay:
+
+```bash
+cd ~/Documents/Arduino/libraries
+git clone --depth 1 https://github.com/pschatzmann/arduino-libopus.git
+```
+
+libopus 1.3.1 của Xiph.Org, giấy phép BSD-3-Clause, do Phil Schatzmann đóng gói.
+
+### Hai thứ bắt buộc, thiếu là hỏng
+
+```cpp
+SET_LOOP_TASK_STACK_SIZE(32 * 1024);
+```
+
+`opus_encode` dùng rất nhiều stack; task `loop()` mặc định chỉ 8 KB nên crash
+ngay lần mã hoá đầu: `Guru Meditation Error ... Stack canary watchpoint`.
+
+Và **phải mã hoá một khung im lặng trước khi WiFi khởi động**. libopus được build
+với `NONTHREADSAFE_PSEUDOSTACK`: lần `ALLOC` đầu tiên nó `malloc` một khối **liền
+mạch 60 KB** làm vùng nháp dùng chung. Để đến sau khi WiFi và TLS chạy thì heap
+đã bị băm nhỏ — còn 170 KB trống nhưng không mảnh nào đủ 60 KB — malloc trả NULL,
+mọi `ALLOC` trả NULL, và `assert(pcm_buf != NULL)` reset thiết bị giữa lúc bắt tay.
+
+Nhìn từ server, cả hai lỗi này **trông y hệt lỗi mạng**: thiết bị nối vào, im
+lặng, `initialize` hết giờ sau 10 giây, rồi lặp lại.
 
 ## 4. Trang người xem
 
@@ -172,7 +218,8 @@ gửi** — từng chuỗi JSON được chép từ `remote.h`, audio đi lên l
 `pumpUplink()` đẩy. Chạy được nó nghĩa là giao thức khớp với adapter.
 
 ```bash
-uv run --with soundfile --with websockets python \n    hardware/alphabot2_esp32/sim_device.py ws://127.0.0.1:8080 loi-noi.wav
+uv run --with soundfile --with websockets python \
+    hardware/alphabot2_esp32/sim_device.py ws://127.0.0.1:8080 loi-noi.wav
 ```
 
 File wav phải là mono 16 kHz PCM_16. Sửa giao thức trong `remote.h` thì sửa ở
