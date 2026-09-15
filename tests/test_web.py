@@ -139,8 +139,8 @@ def test_web_origin_allowlist() -> None:
     config = AppConfig()
     config.web.allowed_origins = ["https://voice.local"]
 
-    assert _origin_allowed("https://voice.local", config)
-    assert not _origin_allowed("https://evil.example", config)
+    assert _origin_allowed("https://voice.local", None, config)
+    assert not _origin_allowed("https://evil.example", None, config)
 
 
 def test_dashboard_renders_model_catalog() -> None:
@@ -222,13 +222,29 @@ async def test_websocket_routes_pcm_from_every_client() -> None:
         assert session.handle_action.call_count == 2
 
 
+def test_page_served_through_a_tunnel_may_open_its_own_websocket() -> None:
+    """Trang do chinh server nay phuc vu, nhin qua tunnel.
+
+    Trinh duyet thay https://voiceagent.example con app thay ket noi http tren
+    loopback, nen so ca origin la tu choi chinh trang cua minh - da tung lam
+    dien thoai tai duoc trang nhung khong mo noi WebSocket.
+    """
+
+    config = AppConfig()
+    assert _origin_allowed("https://voiceagent.example", "voiceagent.example", config)
+    # Host khac thi van la site la, du co Host header.
+    assert not _origin_allowed("https://evil.example", "voiceagent.example", config)
+    # Khong co Host thi khong co gi de doi chieu.
+    assert not _origin_allowed("https://voiceagent.example", None, config)
+
+
 def test_loopback_origin_rejects_other_websites() -> None:
     config = AppConfig()
 
-    assert _origin_allowed(None, config)
-    assert _origin_allowed("http://127.0.0.1:8080", config)
-    assert _origin_allowed("http://localhost:8080", config)
-    assert not _origin_allowed("https://evil.example", config)
+    assert _origin_allowed(None, None, config)
+    assert _origin_allowed("http://127.0.0.1:8080", None, config)
+    assert _origin_allowed("http://localhost:8080", None, config)
+    assert not _origin_allowed("https://evil.example", None, config)
     assert (
         TestClient(create_web_app(config))
         .get("/api/models", headers={"Origin": "https://evil.example"})
@@ -297,7 +313,7 @@ def test_same_origin_check_can_be_disabled_for_development() -> None:
     config = AppConfig()
     config.web.require_same_origin = False
 
-    assert _origin_allowed("https://evil.example", config)
+    assert _origin_allowed("https://evil.example", None, config)
 
     config.web.allowed_origins = ["https://voice.local"]
-    assert not _origin_allowed("https://evil.example", config)
+    assert not _origin_allowed("https://evil.example", None, config)

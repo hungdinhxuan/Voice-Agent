@@ -8,6 +8,7 @@ import secrets
 import struct
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 
 import uvicorn
@@ -54,7 +55,9 @@ def create_web_app(config: AppConfig) -> FastAPI:
     @app.middleware("http")
     async def protect_runtime_api(request: Request, call_next):
         if request.url.path.startswith("/api/") or request.url.path == "/health":
-            if not _origin_allowed(request.headers.get("origin"), config):
+            if not _origin_allowed(
+                request.headers.get("origin"), request.headers.get("host"), config
+            ):
                 return JSONResponse({"detail": "Origin không được phép."}, status_code=403)
             if not _authorized(
                 config.web.access_token,
@@ -120,7 +123,9 @@ def create_web_app(config: AppConfig) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
-        if not _origin_allowed(websocket.headers.get("origin"), config) or not _authorized(
+        if not _origin_allowed(
+            websocket.headers.get("origin"), websocket.headers.get("host"), config
+        ) or not _authorized(
             config.web.access_token,
             websocket.headers.get("authorization"),
             websocket.query_params.get("token"),
@@ -263,14 +268,28 @@ def _authorized(expected: str | None, authorization: str | None, query_token: st
     return secrets.compare_digest(supplied, expected)
 
 
-def _origin_allowed(origin: str | None, config: AppConfig) -> bool:
+def _origin_allowed(origin: str | None, host: str | None, config: AppConfig) -> bool:
+    """Decide whether a page may talk to this server.
+
+    Same shape as the guard in the Xiaozhi adapter, and for the same reason:
+    behind a tunnel the browser sees `https://example.com` while the app sees a
+    plain `http` connection on loopback, so comparing whole origins rejects the
+    server's own page. Comparing the host instead is what "same origin" was
+    meant to say here - the page came from the address the browser used to
+    reach us. Without this a phone loads the page and then silently fails to
+    open its WebSocket, which looks exactly like a broken speaker.
+    """
+
     if origin is None:
         return True
     if config.web.allowed_origins:
+        # Da chiu kho viet danh sach thi ton trong dung danh sach do.
         return origin in config.web.allowed_origins
     if not config.web.require_same_origin:
         return True
-    return origin in _loopback_origins(config.web)
+    if origin in _loopback_origins(config.web):
+        return True
+    return bool(host) and urlsplit(origin).netloc == host
 
 
 def _loopback_origins(web: WebConfig) -> set[str]:

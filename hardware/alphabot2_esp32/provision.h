@@ -99,7 +99,13 @@ static const char PORTAL_CSS[] PROGMEM =
     "small{color:#888}</style>";
 
 static void provisionHandleRoot() {
-    const int found = WiFi.scanComplete();
+    int found = WiFi.scanComplete();
+    if (found == WIFI_SCAN_FAILED) {
+        // Chua quet lan nao. Doi den gio nay moi quet: luc bat AP ma quet thi
+        // radio nhay kenh dung vao luc dien thoai dang do tim hotspot.
+        WiFi.scanNetworks(true);
+        found = WIFI_SCAN_RUNNING;
+    }
     String html = FPSTR(PORTAL_CSS);
     html += F("<h1>Cai WiFi cho robot</h1><p>Chon mang de robot noi vao. "
               "Luu xong robot khoi dong lai, hotspot nay tat.</p>"
@@ -172,13 +178,25 @@ static void provisionHandleCaptive() {
 
 void provisionPortalBegin() {
     if (provisionActive) return;
-    WiFi.mode(WIFI_AP_STA);           // AP de phuc vu trang, STA de quet duoc
-    WiFi.softAP(PORTAL_SSID, PORTAL_PASS[0] ? PORTAL_PASS : nullptr);
+
+    // STA van dang tu thu lai cai mang vua hut. Moi lan thu la mot lan quet, va
+    // trong luc quet thi radio roi kenh cua AP - beacon ngat quang, dien thoai
+    // do tim khong ra hotspot. Cat han STA truoc khi phat moi la tim thay ngay.
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    WiFi.mode(WIFI_AP_STA);           // STA van bat de con quet duoc, nhung khong noi
+
+    // Kenh co dinh, khong an, toi da 4 may.
+    const bool apUp = WiFi.softAP(PORTAL_SSID, PORTAL_PASS[0] ? PORTAL_PASS : nullptr,
+                                  1, 0, 4);
     delay(100);
+    if (!apUp) {
+        Serial.println("[PORTAL] softAP THAT BAI - khong phat duoc hotspot");
+        return;
+    }
     const IPAddress ip = WiFi.softAPIP();
     provisionDns.setErrorReplyCode(DNSReplyCode::NoError);
     provisionDns.start(53, "*", ip);
-    WiFi.scanNetworks(true);          // khong chan, trang doc ket qua sau
 
     provisionHttp.on("/", HTTP_GET, provisionHandleRoot);
     provisionHttp.on("/save", HTTP_POST, provisionHandleSave);
