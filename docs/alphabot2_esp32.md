@@ -29,7 +29,33 @@ nếu muốn khoá hẳn ở hành vi gốc.
 
 ## 2. Sửa trước khi nạp
 
-WiFi nằm trong `secrets.h`, **không theo dõi trong git**. Chép mẫu rồi điền:
+### WiFi: khai báo bằng hotspot của chính robot
+
+Không cần sửa code để đổi mạng. Robot nào **không nối được WiFi** thì tự phát
+một hotspot:
+
+| | |
+| --- | --- |
+| Tên | `alphabot2-setup` |
+| Mật khẩu | `12345678` (đổi ở `PORTAL_SSID` / `PORTAL_PASS` trong `provision.h`) |
+| Trang | tự bật, hoặc mở `http://192.168.4.1/` |
+
+Nối điện thoại vào hotspot đó, điện thoại tự mở trang cài đặt (portal bắt mọi
+truy vấn DNS về mình, nên máy tưởng là mạng cần đăng nhập). Chọn mạng trong
+danh sách quét được, gõ mật khẩu, bấm lưu — robot khởi động lại và nối vào.
+
+Đọc kết quả **bằng chính cái hotspot**: nối được thì nó tắt hẳn, còn thấy nó
+hiện lại sau một phút nghĩa là sai mật khẩu, vào lại và thử lần nữa. Đèn RGB
+chuyển xanh dương khi portal đang bật.
+
+Mật khẩu lưu trong NVS và **thắng `secrets.h`** — nạp lại firmware không lặng lẽ
+kéo robot về mạng cũ. Muốn xoá thì gõ `W` rồi Enter trong Serial Monitor, robot
+xoá NVS và khởi động lại.
+
+### `secrets.h`: giá trị gieo mầm cho lần chạy đầu
+
+Vẫn cần có file này để biên dịch (**không theo dõi trong git**). Điền mạng hay
+dùng vào đây thì robot nối thẳng ngay lần boot đầu, khỏi qua portal:
 
 ```bash
 cp hardware/alphabot2_esp32/secrets.example.h hardware/alphabot2_esp32/secrets.h
@@ -40,7 +66,11 @@ cp hardware/alphabot2_esp32/secrets.example.h hardware/alphabot2_esp32/secrets.h
 #define WIFI_PASS     "mat-khau-cua-ban"
 ```
 
-Địa chỉ server thì ở `alphabot2_esp32.ino`:
+Để nguyên giá trị mẫu cũng chạy được: nối hụt, portal bật, khai báo qua điện thoại.
+
+### Server
+
+Địa chỉ server ở `alphabot2_esp32.ino`:
 
 ```cpp
 #define SERVER_HOST   "voiceagent.hungdx.com"
@@ -56,7 +86,7 @@ nên ESP32 không với tới. Hai cách:
   mở ra toàn mạng nội bộ và **không có xác thực**.
 - **Qua tunnel (đang dùng)** — `SERVER_HOST "voiceagent.hungdx.com"`,
   `SERVER_PORT 443`, `SERVER_TLS 1`. Đi được từ bất cứ đâu nhưng thêm độ trễ, và
-  uplink PCM ~256 kbps đi vòng ra internet rồi quay lại.
+  uplink Opus ~13 kbps đi vòng ra internet rồi quay lại.
 
   Lưu ý: `beginSSL` không kèm CA thì thư viện gọi `setInsecure()`. Đường truyền
   **được mã hoá nhưng ESP32 không xác minh danh tính server** — nó sẽ tin bất cứ

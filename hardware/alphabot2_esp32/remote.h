@@ -418,14 +418,21 @@ static bool pumpUplink() {
 
 bool remoteWifiUp() { return WiFi.status() == WL_CONNECTED; }
 
+// remoteBegin() bo ve giua chung khi khong co WiFi: luc do serverWs chua duoc
+// begin() va viewer chua len. Co WiFi tro lai sau do thi khong the chi bat co
+// MODE_REMOTE - phai chay lai remoteBegin(), va cach sach nhat la khoi dong lai.
+static bool remoteConfigured_ = false;
+bool remoteConfigured() { return remoteConfigured_; }
+
 void remoteBegin() {
     // Truoc WiFi: xem chu thich trong opusEncoderStart ve vi sao thu tu quan trong.
     opusEncoderStart();
 
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);      // ngủ WiFi làm uplink giật
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    Serial.printf("[WIFI] dang noi %s", WIFI_SSID);
+    // Credential lay tu NVS (xem provision.h), khong phai tu secrets.h.
+    WiFi.begin(provisionSsid(), provisionPass());
+    Serial.printf("[WIFI] dang noi %s", provisionSsid());
     const unsigned long deadline = millis() + 15000;
     while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
         delay(250);
@@ -456,6 +463,7 @@ void remoteBegin() {
     serverWs.onEvent(onWsEvent);
     serverWs.setReconnectInterval(LINK_RETRY_MS);
     viewerBegin(DEVICE_ID);
+    remoteConfigured_ = true;
 }
 
 void remoteTick() {

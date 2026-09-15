@@ -118,6 +118,16 @@ void motionSerialTick() {
         len = 0;
         if (!buf[0]) continue;
 
+        // WiFi khong thuoc ve file nay, nhung Serial thi chi duoc co mot nguoi
+        // doc: them vong lap thu hai se an mat ky tu cua vong lap nay. Nen lenh
+        // xoa WiFi o nho day, va ca hai che do deu goi ham nay.
+        if (buf[0] == 'W') {
+            Serial.println("[WIFI] xoa credential va khoi dong lai...");
+            provisionClear();
+            delay(200);
+            ESP.restart();
+        }
+
         if (buf[0] == '?') {
             Serial.printf("[MOTION] dang chay=%s, con cho=%u, stopAt=%lu, now=%lu\n",
                           moveStopAt ? "co" : "khong", moveQueueLen, moveStopAt, millis());

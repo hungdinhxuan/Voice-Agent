@@ -1170,6 +1170,7 @@ void handleSoundDetected()
 // De o day chu khong phai dau file: ba module nay goi motorSet(), rx_handle,
 // micEnabled... nen phai nam sau khi nhung thu do da duoc dinh nghia.
 
+#include "provision.h"
 #include "motion.h"
 #include "viewer.h"
 #include "remote.h"
@@ -1354,6 +1355,7 @@ void setup()
 
 #if ENABLE_REMOTE
     // Thu len REMOTE. That bai thi im lang o lai LOCAL: robot van dung duoc.
+    provisionLoad();
     remoteBegin();
     if (remoteWifiUp())
     {
@@ -1363,6 +1365,11 @@ void setup()
     else
     {
         Serial.println("[MODE] LOCAL - khong co WiFi, nghe tieng dong thi nhich toi");
+        // Khong noi duoc mang thi doi mat khau qua hotspot, khong phai nap lai
+        // firmware. Den xanh duong la dau hieu duy nhat robot co de keu cuu.
+        provisionPortalBegin();
+        setAllRGB(0, 0, 80);
+        rgb.show();
     }
 #else
     Serial.println("[MODE] LOCAL - remote bi tat bang ENABLE_REMOTE");
@@ -1377,6 +1384,10 @@ void setup()
 void loop()
 {
 #if ENABLE_REMOTE
+    // Chi chay khi khong co WiFi, va khi do robot van o LOCAL nen vong lap nay
+    // van doc mic nhu thuong - dat hotspot khong lam robot chet dung.
+    provisionPortalTick();
+
     // WiFi rot thi roi ve LOCAL ngay, va tu quay lai khi noi lai duoc. Khong de
     // robot ket o trang thai cho mot server khong con tra loi.
     if (controlMode == MODE_REMOTE)
@@ -1400,6 +1411,14 @@ void loop()
         lastLocalRetry = millis();
         if (remoteWifiUp())
         {
+            if (!remoteConfigured())
+            {
+                // Boot len khong co WiFi nen link chua bao gio duoc dung. Bat co
+                // MODE_REMOTE o day se cho robot noi voi mot socket khong ton tai.
+                Serial.println("[MODE] co WiFi lan dau -> khoi dong lai");
+                delay(200);
+                ESP.restart();
+            }
             Serial.println("[MODE] co WiFi lai -> REMOTE");
             controlMode = MODE_REMOTE;
             viewerMode("remote");
@@ -1407,6 +1426,15 @@ void loop()
         }
     }
 #endif
+
+    // Den day nghia la dang o LOCAL: nhanh REMOTE o tren da return roi, nen
+    // chi co mot cho doc Serial tai mot thoi diem. Khong co hai cai thi lenh
+    // 'W' (xoa WiFi da luu) se chet dung o dung luc can no nhat - luc mat mang.
+    // motionTick() di kem la de lenh motor go tay van co nguoi tat dong co:
+    // khong co lenh nao trong hang thi no khong lam gi ca.
+    motionSerialTick();
+    motionTick();
+
 
     // ========================================================
     // READ MIC
